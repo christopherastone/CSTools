@@ -1,0 +1,7 @@
+# binaries
+replacer
+
+# private test cases
+testing/**/*.cpp
+testing/**/*.hpp
+
