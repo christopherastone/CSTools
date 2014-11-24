@@ -1,27 +1,22 @@
-LLVM_SRC_PATH := $$HOME/clang-svn/llvm
-LLVM_BUILD_PATH := $$HOME/clang-svn/build
-LLVM_BIN_PATH := $(LLVM_BUILD_PATH)/Debug+Asserts/bin
+LLVM_BIN_PATH := $$HOME/llvm-install/bin
 
 $(info -----------------------------------------------)
-$(info Using LLVM_SRC_PATH = $(LLVM_SRC_PATH))
-$(info Using LLVM_BUILD_PATH = $(LLVM_BUILD_PATH))
 $(info Using LLVM_BIN_PATH = $(LLVM_BIN_PATH))
 $(info -----------------------------------------------)
 
-CLANG_INCLUDES := \
-	-I$(LLVM_SRC_PATH)/tools/clang/include \
-	-I$(LLVM_BUILD_PATH)/tools/clang/include
-#	-I$(LLVM_SRC_PATH)/include \
-#	-I$(LLVM_BUILD_PATH)/include
+LLVM_CONFIG := $(LLVM_BIN_PATH)/llvm-config
+CXX := clang++
 
-LLVM_CXXFLAGS := `$(LLVM_BIN_PATH)/llvm-config --cxxflags`
-LLVM_LDFLAGS := `$(LLVM_BIN_PATH)/llvm-config --ldflags --libs --system-libs`
-LLVM_LDFLAGS_NOLIBS := `$(LLVM_BIN_PATH)/llvm-config --ldflags`
+CPPFLAGS += $(shell $(LLVM_CONFIG) --cppflags)
+CXXFLAGS += -std=c++11 $(shell $(LLVM_CONFIG) --cxxflags)
+LDFLAGS += $(shell $(LLVM_CONFIG) --ldflags) 
 
-CLANG_LIBS := \
+
+LIBS += \
 	-lclangFrontendTool \
 	-lclangFrontend \
 	-lclangDriver \
+	-lclangTooling \
 	-lclangSerialization \
 	-lclangCodeGen \
 	-lclangParse \
@@ -38,19 +33,24 @@ CLANG_LIBS := \
 	-lclangLex \
 	-lclangBasic
 
-CXX := clang++
-CXXFLAGS := -fno-rtti -O0 -std=c++11
+LIBS += $(shell $(LLVM_CONFIG) --libs --system-libs)
+
+#LIBS += -lncurses -lz
 
 all: replacer
 
-replacer: replacer.o extractor.o
-	$(CXX) $^ $(CLANG_LIBS) $(LLVM_LDFLAGS) -o $@
+replacer: replacer.o 
+	@echo Linking $@
+	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $^ $(LIBS)
 
-replacer.o: replacer.cpp extractor.hpp
-	$(CXX) $(CXXFLAGS) -c $(LLVM_CXXFLAGS) $(CLANG_INCLUDES) $< -o $@
-
-extractor.o: extractor.cpp extractor.hpp
-	$(CXX) $(CXXFLAGS) -c $(LLVM_CXXFLAGS) $(CLANG_INCLUDES) $< -o $@
+replacer.o: replacer.cpp 
+	@echo Compiling $*.cpp
+	$(CXX) -c $(CPPFLAGS) $(CXXFLAGS) $<
+	#$(CXX) $(CXXFLAGS) -c $(LLVM_CXXFLAGS) $(CLANG_INCLUDES) $< -o $@
 
 clean:
-	rm replacer extractor replacer.o extractor.o
+	rm -f replacer replacer.o
+
+test: all
+	(cd testing; $(MAKE) test)
+

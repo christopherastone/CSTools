@@ -1,9 +1,10 @@
-#include <cstdio>
-#include <memory>
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <regex>
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -18,132 +19,240 @@
 #include "clang/Parse/ParseAST.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Rewrite/Frontend/Rewriters.h"
+#include "clang/Tooling/Tooling.h"
+#include "clang/Tooling/CommonOptionsParser.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "extractor.hpp"
-
 using namespace clang;
+using namespace clang::tooling;
+using namespace llvm;
+using namespace std;
+
+static unordered_set<string> potentialReplacements;
+static unordered_map<string,string> replacements;
 
 
-// By implementing RecursiveASTVisitor, we can specify which AST nodes
-// we're interested in by overriding relevant methods.
-class MyASTVisitor : public RecursiveASTVisitor<MyASTVisitor> {
+static cl::OptionCategory MyToolCategory("My tool options");
+static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
+static cl::extrahelp MoreHelp("\nMore help text...");
+
+static cl::opt<string> replacementFile(
+      cl::Positional,
+      cl::desc("<replacement file>"),
+      cl::Required);
+
+static cl::list<string> functionsToReplace(
+      "f",
+      cl::desc("<id>"),
+      cl::ZeroOrMore);
+
+//////////////////////
+// HELPER FUNCTIONS
+//////////////////////
+
+std::string nameOfDecl(const PrintingPolicy& Policy, FunctionDecl* f)
+{
+  std::string funcName = f->getQualifiedNameAsString();
+  std::string fullName = funcName + "(";
+  ArrayRef<ParmVarDecl*> parameters = f->parameters();
+  //QualType returnTy = f->getReturnType();
+  //llvm::errs() << "Returns " << returnTy.getAsString() << "\n";
+  for (const auto& pvd : parameters) {
+    if (&pvd != &parameters[0]) fullName += ", ";
+    fullName += pvd->getType().getCanonicalType().getAsString(Policy);
+  }
+  fullName += ")";
+
+  if (CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(f)) {
+    if (m->isConst()) {
+      fullName += " const";
+                }
+  }
+
+  //QualType returnTy = f->getReturnType();
+  //llvm::errs() << "Returns " << returnTy.getCanonicalType().getAsString() << "\n";
+
+  return fullName;
+}
+
+///////////////////////////////////
+// Code for Extracting Functions //
+///////////////////////////////////
+
+class MyASTSearchConsumer : public ASTConsumer {
 public:
-  MyASTVisitor(Rewriter &R, std::vector<std::string> des, std::string repFile) :
-    TheRewriter(R),
-    DesiredFunctions(des),
-    ReplacementFile(repFile) {}
+  MyASTSearchConsumer(Rewriter &R) : TheRewriter{R} {}
 
-  bool VisitFunctionDecl(FunctionDecl *f) {
-    // Only function definitions (with bodies), not declarations.
-    if (f->hasBody()) {
+  // Override the method that gets called for each parsed top-level
+  // declaration.
+  virtual bool HandleTopLevelDecl(DeclGroupRef DR) {
 
-      std::string FuncName = f->getNameInfo().getName().getAsString();
-      for (std::string desired : DesiredFunctions){
-        if (FuncName == desired) {
-            SourceExtractor se{ReplacementFile, desired};
-            SourceLocation ST = f->getSourceRange().getBegin();
-            TheRewriter.ReplaceText(f->getSourceRange(), se.getExtractedSource());
+    const SourceManager& SM = TheRewriter.getSourceMgr();
+    const LangOptions& LangOpts = TheRewriter.getLangOpts();
+
+    for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
+      if (FunctionDecl* f = dyn_cast<FunctionDecl>(*b)) {
+        if (f->hasBody()) {
+          string fullName = nameOfDecl(LangOpts, f);
+
+          auto i = potentialReplacements.find(fullName);
+
+          if (i != potentialReplacements.end()) {
+
+            llvm::errs() << "Found the extracted function " << fullName << "\n";
+            SourceRange range = f->getSourceRange();
+            SourceLocation start = range.getBegin();
+            SourceLocation stop = range.getEnd();
+            //llvm::errs() << "At location" <<
+              //TheRewriter.getSourceMgr().getFilename(start) << "\n";
+
+            // Clang source ranges are closed intervals, meaning
+            // that 'stop' identifies the last token in the function,
+            // i.e., the closing right curly brace. We could just
+            // add 1 character to get the open interval needed below,
+            // but let's be good and programmatically compute the
+            // length of this final token.
+            size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOpts);
+
+            std::string code =
+              std::string(SM.getCharacterData(start),
+                  SM.getCharacterData(stop)-SM.getCharacterData(start)+offset);
+
+            replacements.insert(make_pair(fullName, code));
+            potentialReplacements.erase(i);
+          }
         }
       }
     }
+    return true;
+  }
 
+private:
+  Rewriter& TheRewriter;
+};
+
+
+class MySearchAction : public ASTFrontendAction {
+public:
+  MySearchAction() {}
+
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef file) override
+  {
+    llvm::errs() << "** Creating AST consumer for: " << file << "\n";
+    TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
+    return llvm::make_unique<MyASTSearchConsumer>(TheRewriter);
+  }
+
+private:
+  Rewriter TheRewriter;
+};
+
+
+///////////////////////////////
+// Code for Replacing Functions
+///////////////////////////////
+
+// Implementation of the ASTConsumer interface for reading an AST produced
+// by the Clang parser.
+class MyASTReplaceConsumer : public ASTConsumer {
+public:
+  MyASTReplaceConsumer(Rewriter &R) :
+    TheRewriter{R} {}
+
+  // Override the method that gets called for each parsed top-level
+  // declaration.
+  virtual bool HandleTopLevelDecl(DeclGroupRef DR) {
+    //llvm::errs() << "Found a group\n";
+    for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
+      if (FunctionDecl* f = dyn_cast<FunctionDecl>(*b)) {
+        if (f->hasBody()) {
+
+          //llvm::errs() << "Saw function " << funcName << "\n";
+          //SourceRange range = f->getSourceRange();
+          //SourceLocation start = range.getBegin();
+          //llvm::errs() << "At location" <<
+          //TheRewriter.getSourceMgr().getFilename(start) << "\n";
+
+          //ArrayRef<ParmVarDecl*> parameters = f->parameters();
+
+          string fullName = nameOfDecl(TheRewriter.getLangOpts(), f);
+          auto i = replacements.find(fullName);
+          if (i != replacements.end()) {
+            SourceRange range = f->getSourceRange();
+            TheRewriter.ReplaceText(f->getSourceRange(), i->second);
+          }
+        }
+      }
+    }
     return true;
   }
 
 private:
   Rewriter &TheRewriter;
-  std::vector<std::string> DesiredFunctions;
-  std::string ReplacementFile;
 };
 
-// Implementation of the ASTConsumer interface for reading an AST produced
-// by the Clang parser.
-class MyASTConsumer : public ASTConsumer {
-public:
-  MyASTConsumer(Rewriter &R, std::vector<std::string> des, std::string repFile) :
-    Visitor(R, des, repFile) {}
 
-  // Override the method that gets called for each parsed top-level
-  // declaration.
-  virtual bool HandleTopLevelDecl(DeclGroupRef DR) {
-    for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b)
-      // Traverse the declaration using our AST visitor.
-      Visitor.TraverseDecl(*b);
-    return true;
+// For each source file provided to the tool, a new FrontendAction is created.
+
+class MyReplaceAction : public ASTFrontendAction {
+public:
+  MyReplaceAction() {}
+
+  void EndSourceFileAction() override
+  {
+    SourceManager &SM = TheRewriter.getSourceMgr();
+
+    //llvm::errs() << "** EndSourceFileAction for: "
+                 //<< SM.getFileEntryForID(SM.getMainFileID())->getName() << "\n";
+
+    // Now emit the rewritten buffer.
+    TheRewriter.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
+  }
+
+
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef file) override
+  {
+    //llvm::errs() << "** Creating AST consumer for: " << file << "\n";
+
+    TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
+    return llvm::make_unique<MyASTReplaceConsumer>(TheRewriter);
   }
 
 private:
-  MyASTVisitor Visitor;
+  Rewriter TheRewriter;
 };
 
-int main(int argc, char *argv[]) {
-  if (argc < 4) {
-    llvm::errs() << "Usage: replacer <initial file> <replacement file> <functions...>\n";
-    return 1;
+///////////////////////////////////////////////////////////////////////
+
+
+int main(int argc, const char **argv) {
+  // llvm::sys::PrintStackTraceOnErrorSignal();
+
+  CommonOptionsParser OptionsParser(argc, argv, MyToolCategory);
+
+  for (auto& s : functionsToReplace) {
+    potentialReplacements.insert(s);
   }
 
-  std::vector<std::string> desiredFunctions;
+  ClangTool SearchTool(OptionsParser.getCompilations(),
+                        vector<string>{ replacementFile } );
 
-  for (int i = 3; i < argc; i++){
-    desiredFunctions.push_back(argv[i]);
+  int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
+
+  if (searchError) {
+    llvm::errs() << "**Problem reading the file of replacements "
+       << replacementFile << "\n";
+    exit(searchError);
   }
+  ClangTool ReplaceTool(OptionsParser.getCompilations(),
+                        OptionsParser.getSourcePathList());
+  return ReplaceTool.run(newFrontendActionFactory<MyReplaceAction>().get());
 
-  std::string ReplacementFile(argv[2]);
-
-  // CompilerInstance will hold the instance of the Clang compiler for us,
-  // managing the various objects needed to run the compiler.
-  CompilerInstance TheCompInst;
-  TheCompInst.createDiagnostics();
-
-  CompilerInvocation TheCompInv;
-
-  LangOptions &lo = TheCompInst.getLangOpts();
-  lo.CPlusPlus = 1;
-  lo.Bool = 1;
-  lo.WChar = 1;
-  lo.NoBuiltin = 0;
-
-  // Initialize target info with the default triple for our platform.
-  auto TO = std::make_shared<TargetOptions>();
-  TO->Triple = llvm::sys::getDefaultTargetTriple();
-  TargetInfo *TI =
-      TargetInfo::CreateTargetInfo(TheCompInst.getDiagnostics(), TO);
-  TheCompInst.setTarget(TI);
-
-  TheCompInst.createFileManager();
-  FileManager &FileMgr = TheCompInst.getFileManager();
-  TheCompInst.createSourceManager(FileMgr);
-  SourceManager &SourceMgr = TheCompInst.getSourceManager();
-  TheCompInst.createPreprocessor(TU_Module);
-
-  Preprocessor& pp = TheCompInst.getPreprocessor();
-
-  pp.getBuiltinInfo().InitializeBuiltins(pp.getIdentifierTable(), lo);
-                                          //pp.getLangOpts().NoBuiltin);
-
-  TheCompInst.createASTContext();
-
-  // A Rewriter helps us manage the code rewriting task.
-  Rewriter TheRewriter;
-  TheRewriter.setSourceMgr(SourceMgr, TheCompInst.getLangOpts());
-
-  // Set the main file handled by the source manager to the input file.
-  const FileEntry *FileIn = FileMgr.getFile(argv[1]);
-  SourceMgr.setMainFileID(
-      SourceMgr.createFileID(FileIn, SourceLocation(), SrcMgr::C_User));
-  TheCompInst.getDiagnosticClient().BeginSourceFile(
-      TheCompInst.getLangOpts(), &TheCompInst.getPreprocessor());
-
-  // Create an AST consumer instance which is going to get called by
-  // ParseAST.
-  MyASTConsumer TheConsumer(TheRewriter, desiredFunctions, ReplacementFile);
-
-  // Parse the file to AST, registering our consumer as the AST consumer.
-  ParseAST(TheCompInst.getPreprocessor(), &TheConsumer,
-           TheCompInst.getASTContext());
-
+/*
   // At this point the rewriter's buffer should be full with the rewritten
   // file contents.
   const RewriteBuffer *RewriteBuf =
@@ -151,4 +260,6 @@ int main(int argc, char *argv[]) {
   llvm::outs() << std::string(RewriteBuf->begin(), RewriteBuf->end());
 
   return 0;
+  */
+
 }
