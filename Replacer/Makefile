@@ -52,5 +52,5 @@ clean:
 	rm -f replacer replacer.o
 
 test: all
-	(cd testing; $(MAKE) test)
+	(cd testing; $(MAKE) test2)
 

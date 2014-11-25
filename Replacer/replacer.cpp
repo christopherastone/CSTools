@@ -32,7 +32,7 @@ using namespace std;
 
 static unordered_set<string> potentialReplacements;
 static unordered_map<string,string> replacements;
-
+static bool replaceAll = false;
 
 static cl::OptionCategory MyToolCategory("My tool options");
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
@@ -99,12 +99,16 @@ public:
 
           auto i = potentialReplacements.find(fullName);
 
-          if (i != potentialReplacements.end()) {
+          if (replaceAll || i != potentialReplacements.end()) {
 
-            llvm::errs() << "Found the extracted function " << fullName << "\n";
             SourceRange range = f->getSourceRange();
             SourceLocation start = range.getBegin();
             SourceLocation stop = range.getEnd();
+
+            if (start.isMacroID()) break;
+            if (SM.isInSystemHeader(start)) break;
+            llvm::errs() << "Search found the extracted function " << fullName << "\n";
+
             //llvm::errs() << "At location" <<
               //TheRewriter.getSourceMgr().getFilename(start) << "\n";
 
@@ -121,7 +125,6 @@ public:
                   SM.getCharacterData(stop)-SM.getCharacterData(start)+offset);
 
             replacements.insert(make_pair(fullName, code));
-            potentialReplacements.erase(i);
           }
         }
       }
@@ -240,6 +243,10 @@ int main(int argc, const char **argv) {
 
   ClangTool SearchTool(OptionsParser.getCompilations(),
                         vector<string>{ replacementFile } );
+
+  if (functionsToReplace.size() == 0) {
+    replaceAll = true;
+  }
 
   int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
 

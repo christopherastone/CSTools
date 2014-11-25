@@ -4,4 +4,5 @@ replacer
 # private test cases
 testing/**/*.cpp
 testing/**/*.hpp
+testing/bigint*
 
