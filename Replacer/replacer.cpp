@@ -2,9 +2,8 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
-#include <unordered_map>
 #include <unordered_set>
-#include <regex>
+#include <unordered_map>
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -19,6 +18,7 @@
 #include "clang/Parse/ParseAST.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Rewrite/Frontend/Rewriters.h"
+#include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "llvm/Support/CommandLine.h"
@@ -158,16 +158,21 @@ private:
 // Code for Replacing Functions
 ///////////////////////////////
 
+
 // Implementation of the ASTConsumer interface for reading an AST produced
 // by the Clang parser.
 class MyASTReplaceConsumer : public ASTConsumer {
 public:
-  MyASTReplaceConsumer(Rewriter &R) :
-    TheRewriter{R} {}
+  MyASTReplaceConsumer(Rewriter &R, Replacements& P) :
+    TheRewriter{R}, TheReplacements{P} {}
 
   // Override the method that gets called for each parsed top-level
   // declaration.
   virtual bool HandleTopLevelDecl(DeclGroupRef DR) {
+
+    const SourceManager& SM = TheRewriter.getSourceMgr();
+    const LangOptions& LangOpts = TheRewriter.getLangOpts();
+
     //llvm::errs() << "Found a group\n";
     for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
       if (FunctionDecl* f = dyn_cast<FunctionDecl>(*b)) {
@@ -181,11 +186,13 @@ public:
 
           //ArrayRef<ParmVarDecl*> parameters = f->parameters();
 
-          string fullName = nameOfDecl(TheRewriter.getLangOpts(), f);
+          string fullName = nameOfDecl(LangOpts, f);
           auto i = replacements.find(fullName);
           if (i != replacements.end()) {
             SourceRange range = f->getSourceRange();
-            TheRewriter.ReplaceText(f->getSourceRange(), i->second);
+            Replacement repl{SM, CharSourceRange{range,true}, i->second};
+            TheReplacements.insert(repl);
+            // TheRewriter.ReplaceText(f->getSourceRange(), i->second);
           }
         }
       }
@@ -195,8 +202,11 @@ public:
 
 private:
   Rewriter &TheRewriter;
+  Replacements& TheReplacements;
 };
 
+// HACK
+Replacements* repl = nullptr;
 
 // For each source file provided to the tool, a new FrontendAction is created.
 
@@ -212,7 +222,7 @@ public:
                  //<< SM.getFileEntryForID(SM.getMainFileID())->getName() << "\n";
 
     // Now emit the rewritten buffer.
-    TheRewriter.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
+    //TheRewriter.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
   }
 
 
@@ -222,7 +232,8 @@ public:
     //llvm::errs() << "** Creating AST consumer for: " << file << "\n";
 
     TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-    return llvm::make_unique<MyASTReplaceConsumer>(TheRewriter);
+    return llvm::make_unique<MyASTReplaceConsumer>(TheRewriter,
+                                                   *repl);
   }
 
 private:
@@ -255,9 +266,11 @@ int main(int argc, const char **argv) {
        << replacementFile << "\n";
     exit(searchError);
   }
-  ClangTool ReplaceTool(OptionsParser.getCompilations(),
+  RefactoringTool ReplaceTool(OptionsParser.getCompilations(),
                         OptionsParser.getSourcePathList());
-  return ReplaceTool.run(newFrontendActionFactory<MyReplaceAction>().get());
+  //HACK
+  repl = &ReplaceTool.getReplacements();
+  return ReplaceTool.runAndSave(newFrontendActionFactory<MyReplaceAction>().get());
 
 /*
   // At this point the rewriter's buffer should be full with the rewritten
@@ -270,3 +283,4 @@ int main(int argc, const char **argv) {
   */
 
 }
+

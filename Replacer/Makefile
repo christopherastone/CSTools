@@ -7,8 +7,8 @@ $(info -----------------------------------------------)
 LLVM_CONFIG := $(LLVM_BIN_PATH)/llvm-config
 CXX := clang++
 
-CPPFLAGS += $(shell $(LLVM_CONFIG) --cppflags)
-CXXFLAGS += -std=c++11 $(shell $(LLVM_CONFIG) --cxxflags)
+CPPFLAGS += #$(shell $(LLVM_CONFIG) --cppflags)
+CXXFLAGS += -std=c++11 -stdlib=libc++ $(shell $(LLVM_CONFIG) --cxxflags)
 LDFLAGS += $(shell $(LLVM_CONFIG) --ldflags) 
 
 
@@ -17,6 +17,7 @@ LIBS += \
 	-lclangFrontend \
 	-lclangDriver \
 	-lclangTooling \
+	-lclangToolingCore \
 	-lclangSerialization \
 	-lclangCodeGen \
 	-lclangParse \
@@ -31,7 +32,7 @@ LIBS += \
 	-lclangEdit \
 	-lclangAST \
 	-lclangLex \
-	-lclangBasic
+	-lclangBasic 
 
 LIBS += $(shell $(LLVM_CONFIG) --libs --system-libs)
 
