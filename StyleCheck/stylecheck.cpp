@@ -48,6 +48,9 @@ std::regex final_underscore = std::regex(".*_");
 std::regex is_operator = std::regex("(.*::)?(operator[^A-Za-z]+|operator .*)");
 std::regex is_UPPER_CASE = std::regex("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*");
 
+// Clang introduces variables like __range to implement foreach loops
+std::regex is_internal = std::regex("__[A-Za-z0-9]*");
+
 std::regex is_headerFile = std::regex(".*\\.h(pp)?");
 
 ///////////////////////////////
@@ -107,7 +110,7 @@ public:
               SM.getPresumedColumnNumber(start),
               "Found 'using namespace' in a header",
               code,
-              Severity::WARNING
+              Severity::ERROR
             );
           }
           break;
@@ -159,16 +162,20 @@ public:
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool has_underscore = std::regex_match(name, final_underscore);
           bool matches_UPPER_CASE = std::regex_match(name, is_UPPER_CASE);
+          bool matches_internal = std::regex_match(name, is_internal);
           auto varType = f->getType();
           bool is_const = varType.isConstQualified();
           const Expr* init = f->getAnyInitializer();
           bool has_constexpr_definition =
             (f->isConstexpr()) ||
-            ((init != nullptr) && (init->isCXX11ConstantExpr(*(Result.Context))));
+            // The following code crashes with assertion errors as of July 2, 2015
+            //((init != nullptr) && (init->isCXX11ConstantExpr(*(Result.Context))));
+            false;
 
           if (!is_const &&
               ! (matches_camelCase || has_underscore) &&
-              ! (matches_camelCase && has_underscore && f->isStaticDataMember())) {
+              ! (matches_camelCase && has_underscore && f->isStaticDataMember()) &&
+              ! matches_internal) {
             lineIssues.emplace_back(
               SM.getFilename(start),
               SM.getPresumedLineNumber(start),
@@ -180,15 +187,14 @@ public:
             );
           } else if (is_const &&
                       ! matches_UPPER_CASE &&
-                      ! (matches_camelCase && !has_constexpr_definition)) {
+                      ! (matches_camelCase && !has_constexpr_definition) &&
+                      ! matches_internal) {
               //init->dump();
               lineIssues.emplace_back(
                 SM.getFilename(start),
                 SM.getPresumedLineNumber(start),
                 SM.getPresumedColumnNumber(start),
-                "Found a non-UPPER_CASE constant name" + f->getQualifiedNameAsString() +
-                  to_string(matches_UPPER_CASE) + to_string(matches_camelCase) +
-                  to_string(has_constexpr_definition),
+                "Found a non-UPPER_CASE constant name " + f->getQualifiedNameAsString()),
                 code,
                 Severity::ERROR
               );
@@ -312,30 +318,6 @@ private:
 };
 
 
-class ProcessLowerCaseClassName : public MatchFinder::MatchCallback {
-public:
-  ProcessLowerCaseClassName(Replacements* Replace) : Replace(Replace) {}
-
-  virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched class-declaration AST node
-    const CXXRecordDecl *decl = Result.Nodes.getNodeAs<CXXRecordDecl>("class");
-
-    // Get the source location of that declaration
-    SourceManager& SM = *Result.SourceManager;
-    SourceLocation start = decl->getLocStart();
-
-    std::cout << "Found class name "
-              << decl->getNameAsString()
-              << " with lowercase first letter at "
-              << start.printToString(SM)
-        << std::endl;
-  }
-
-private:
-  Replacements* Replace;
-};
-
-
 class ProcessMemberCall : public MatchFinder::MatchCallback {
 public:
   ProcessMemberCall(Replacements* Replace) : Replace(Replace) {}
@@ -424,14 +406,9 @@ int main(int argc, const char **argv) {
   MatchFinder Finder;
 
   // Create callback object(s) for each rule.
-/*  ProcessNamespaceInHeader cb1(&Tool.getReplacements());
-  ProcessDataMemberWithoutUnderscore cb2(&Tool.getReplacements());
-  ProcessVariableWithUnderscore cb3(&Tool.getReplacements());
-  ProcessLowerCaseClassName cb4(&Tool.getReplacements());
   ProcessMemberCall cb5(&Tool.getReplacements());
   ProcessGotoStmt cb6(&Tool.getReplacements());
   ProcessThisCall  cb7(&Tool.getReplacements());
-*/
   ProcessDecl  cbDecl(&Tool.getReplacements());
 
 /*
