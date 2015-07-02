@@ -2,32 +2,34 @@
 #define ISSUE_HPP_INC
 
 #include <string>
-#include "severity.hpp"
 
-class Issue{
+enum class Severity {
+  ERROR,
+  WARNING
+};
+
+class Issue {
 public:
-  Issue(int line, int col, std::string title,
-        std::string message, severity_t severity);
+  Issue(std::string file, int line, int col, std::string title,
+        std::string message, Severity severity);
 
-  Issue(std::string title, std::string message, severity_t severity):
-    Issue(-1, -1, title, message, severity) {};
-
-  int getLine() const;
-
-  int getColumn() const;
-
-  std::string getTitle() const;
-
-  std::string getMessage() const;
-
-  severity_t getSeverity() const;
+  bool operator<(const Issue&) const;
+  std::string getText() const;
+  std::string getHTML() const;
 
 private:
+  std::string file_;
   int line_;
   int column_;
   std::string title_;
   std::string message_;
-  severity_t severity_;
+  Severity severity_;
+
+  static std::string cwd_;
+
+  std::string getSeverityText() const;
+  std::string getSeverityANSI() const;
+  std::string getSeverityHTML() const;
 };
 
 #endif

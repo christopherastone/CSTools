@@ -1,52 +1,26 @@
-LLVM_BIN_PATH := $$HOME/llvm-install/bin
+include ../llvm.mk
+include ../clang.mk
 
-$(info -----------------------------------------------)
-$(info Using LLVM_BIN_PATH = $(LLVM_BIN_PATH))
-$(info -----------------------------------------------)
+CXX = clang++    # Use the system compiler for speed
 
-LLVM_CONFIG := $(LLVM_BIN_PATH)/llvm-config
-CXX := clang++
-
-CPPFLAGS += #$(shell $(LLVM_CONFIG) --cppflags)
-CXXFLAGS += -std=c++11 -stdlib=libc++ $(shell $(LLVM_CONFIG) --cxxflags)
-LDFLAGS += $(shell $(LLVM_CONFIG) --ldflags) 
+CPPFLAGS += $(LLVM_CPPFLAGS)
+CXXFLAGS += -std=c++11 -stdlib=libc++ $(LLVM_CXXFLAGS)
+LDFLAGS  += $(LLVM_LDFLAGS)
+LIBS += $(CLANG_LIBS) $(LLVM_LIBS)
 
 
-LIBS += \
-	-lclangFrontendTool \
-	-lclangFrontend \
-	-lclangDriver \
-	-lclangTooling \
-	-lclangToolingCore \
-	-lclangSerialization \
-	-lclangCodeGen \
-	-lclangParse \
-	-lclangSema \
-	-lclangRewriteFrontend \
-	-lclangRewrite \
-	-lclangStaticAnalyzerFrontend \
-	-lclangStaticAnalyzerCheckers \
-	-lclangStaticAnalyzerCore \
-	-lclangARCMigrate \
-	-lclangAnalysis \
-	-lclangEdit \
-	-lclangAST \
-	-lclangLex \
-	-lclangBasic 
 
-LIBS += $(shell $(LLVM_CONFIG) --libs --system-libs)
-
-#LIBS += -lncurses -lz
-
-all: replacer
+# the LLVM_CONFIG dependency is just there to double-check that
+# we have our path set correctly
+all: $(LLVM_CONFIG) replacer
 
 replacer: replacer.o 
 	@echo Linking $@
-	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $^ $(LIBS)
+	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
 
 replacer.o: replacer.cpp 
 	@echo Compiling $*.cpp
-	$(CXX) -c $(CPPFLAGS) $(CXXFLAGS) $<
+	$(CXX) -c $(CXXFLAGS) $<
 	#$(CXX) $(CXXFLAGS) -c $(LLVM_CXXFLAGS) $(CLANG_INCLUDES) $< -o $@
 
 clean:
