@@ -1,14 +1,15 @@
 #include <algorithm>
 #include <string>
 #include <sstream>
-#include "unistd.h"
-#include "sys/param.h"
+
+#include <boost/filesystem.hpp>
 
 #include "llvm/Support/Path.h"
 
 #include "issue.hpp"
 
-std::string Issue::cwd_ = std::string(getcwd(new char[MAXPATHLEN], MAXPATHLEN)) + "/";
+std::string Issue::cwd_ =
+   boost::filesystem::canonical( boost::filesystem::current_path() ).string() + "/";
 
 Issue::Issue(std::string file, int line, int col, std::string title, std::string message,
               Severity severity):
@@ -19,6 +20,7 @@ Issue::Issue(std::string file, int line, int col, std::string title, std::string
   message_{message},
   severity_{severity}
 {
+  file = boost::filesystem::canonical(file).string();
   if (cwd_.size() < file.size()) {
   auto pair = std::mismatch(cwd_.begin(), cwd_.end(), file.begin());
   file_ = std::string{pair.second, end(file)};
@@ -29,7 +31,8 @@ Issue::Issue(std::string file, int line, int col, std::string title, std::string
 
 bool Issue::operator<(const Issue& rhs) const
 {
-  return line_ < rhs.line_;
+  return file_ < rhs.file_ ||
+         (file_ == rhs.file_ && line_ < rhs.line_);
 }
 
 std::string Issue::getSeverityANSI() const
@@ -62,7 +65,6 @@ std::string Issue::getText() const
   ss << getSeverityANSI() << ": " ;
   ss << title_ << "\n";
   ss << message_ << "\n";
-
   return ss.str();
 }
 

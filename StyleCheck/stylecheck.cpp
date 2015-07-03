@@ -19,13 +19,23 @@
 
 #include "issue.hpp"
 
+
+
+#include "clang/ASTMatchers/ASTMatchersInternal.h"
+#include "clang/ASTMatchers/ASTMatchersMacros.h"
+
+namespace clang {
+  namespace ast_matchers {
+    const internal::VariadicDynCastAllOfMatcher<Stmt, ParenExpr> parenExpr;
+  }
+}
+
 using namespace clang;
 using namespace clang::ast_matchers;
 using namespace clang::driver;
 using namespace clang::tooling;
 using namespace llvm;
 using namespace std;
-
 static cl::OptionCategory StyleCheckCategory("Style Check Options");
 
 static cl::opt<bool> Force ("f", cl::desc("Overwrite output files"));
@@ -57,6 +67,35 @@ std::regex is_headerFile = std::regex(".*\\.h(pp)?");
 // Callbacks for Nodes Found
 ///////////////////////////////
 
+
+void addIssue(const SourceManager& SM, const SourceRange& range,
+              vector<Issue>& v, std::string message, Severity sev = Severity::WARNING)
+{
+  SourceLocation start = range.getBegin();
+  SourceLocation stop  = range.getEnd();
+
+  size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOptions());
+  std::string code = "...code not available...";
+
+  //if (SM.isMacroArgExpansion(start)) start = SM.getFileLoc(start);
+  //if (SM.isMacroArgExpansion(stop )) stop  = SM.getFileLoc(stop);
+
+  if (SM.isWrittenInSameFile(start, stop)) {
+    ptrdiff_t len = SM.getCharacterData(stop)-SM.getCharacterData(start)+offset;
+    if (len >= 0 && len < 10000) {
+      code = std::string(SM.getCharacterData(start), len);
+    }
+  }
+
+  v.emplace_back( SM.getFilename(start),
+                  SM.getPresumedLineNumber(start),
+                  SM.getPresumedColumnNumber(start),
+                  message, code, sev );
+}
+
+
+
+
 // Each class defines a run() method handling matches
 //    for a different rule.
 // For simplicity, we declare and define all the code
@@ -71,86 +110,42 @@ public:
     // Get the matched class-declaration AST node
     const Decl *decl = Result.Nodes.getNodeAs<Decl>("decl");
 
+    //decl->dump();
+
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = decl->getSourceRange();
-    SourceLocation start = range.getBegin();
-    SourceLocation stop = range.getEnd();
-
-    size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOptions());
-    std::string code;
-
-    if (SM.isMacroArgExpansion(start)) {
-      start = SM.getFileLoc(start);
-    }
-
-    if (SM.isMacroArgExpansion(stop)) {
-      stop = SM.getFileLoc(stop);
-    }
-
-    // Wasteful for things like namespace declarations, whose contents might be an entire C++
-    // file.
-    if (SM.isWrittenInSameFile(start, stop)) {
-      ptrdiff_t len = SM.getCharacterData(stop)-SM.getCharacterData(start)+offset;
-      assert(len >= 0);
-      assert(len < 10000000);
-      code = std::string(SM.getCharacterData(start), len);
-    } else {
-      code = "...code not available...";
-    }
 
     switch (decl->getKind()) {
       case Decl::UsingDirective:
         {
-          std::string filename = SM.getFilename(start);
+          std::string filename = SM.getFilename(range.getBegin());
           if (std::regex_match(filename, is_headerFile)) {
-            lineIssues.emplace_back(
-              filename,
-              SM.getPresumedLineNumber(start),
-              SM.getPresumedColumnNumber(start),
-              "Found 'using namespace' in a header",
-              code,
-              Severity::ERROR
-            );
+            addIssue( SM, range, lineIssues,
+                      "Found 'using namespace' in a header" );
           }
           break;
         }
-/*
-      case Decl::FieldDecl:
-
-        lineIssues.emplace_back(
-          SM.getFilename(start),
-          SM.getPresumedLineNumber(start),
-          SM.getPresumedColumnNumber(start),
-          "Found a " + std::string(decl->getDeclKindName()) + "declaration",
-          code,
-          Severity::WARNING
-        );
-        break;
-*/
 
       case Decl::Function:
       case Decl::CXXMethod:
-        break;
         {
           const FunctionDecl* f = dyn_cast<FunctionDecl>(decl);
           if (! f->doesThisDeclarationHaveABody()) break;
 
-          std::string name = f->getDeclName().getAsString();
+          std::string name = f->getNameAsString();
+
+          range.setEnd(f->getBody()->getLocStart());
+
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool matches_operator = std::regex_match(name, is_operator);
           bool has_underscore = std::regex_match(name, final_underscore);
+
           if ( (! matches_camelCase || has_underscore) &&
                ! matches_operator) {
-            cout << "'" << name << "' " << matches_operator << endl;
-            lineIssues.emplace_back(
-              SM.getFilename(start),
-              SM.getPresumedLineNumber(start),
-              SM.getPresumedColumnNumber(start),
-              "Found non-camelCase function name" + f->getQualifiedNameAsString(),
-              code,
-              Severity::WARNING
-            );
+            addIssue( SM, range, lineIssues,
+                      "Found non-camelCase function name: " +
+                         f->getQualifiedNameAsString() );
           }
           break;
         }
@@ -176,28 +171,18 @@ public:
               ! (matches_camelCase || has_underscore) &&
               ! (matches_camelCase && has_underscore && f->isStaticDataMember()) &&
               ! matches_internal) {
-            lineIssues.emplace_back(
-              SM.getFilename(start),
-              SM.getPresumedLineNumber(start),
-              SM.getPresumedColumnNumber(start),
-              "Found a non-camelCase variable name" + f->getQualifiedNameAsString() +
-                ((matches_UPPER_CASE && has_constexpr_definition) ? " (is this supposed to be constant?)" : ""),
-              code,
-              Severity::ERROR
-            );
+            addIssue( SM, range, lineIssues,
+                      "Found a non-camelCase variable name: " +
+                        f->getQualifiedNameAsString() +
+                        ((matches_UPPER_CASE && has_constexpr_definition) ?
+                           " (is this supposed to be constant?)" : "") );
           } else if (is_const &&
                       ! matches_UPPER_CASE &&
                       ! (matches_camelCase && !has_constexpr_definition) &&
                       ! matches_internal) {
-              //init->dump();
-              lineIssues.emplace_back(
-                SM.getFilename(start),
-                SM.getPresumedLineNumber(start),
-                SM.getPresumedColumnNumber(start),
-                "Found a non-UPPER_CASE constant name " + f->getQualifiedNameAsString()),
-                code,
-                Severity::ERROR
-              );
+            addIssue( SM, range, lineIssues,
+                      "Found a non-UPPER_CASE constant name: " +
+                        f->getQualifiedNameAsString() );
           }
           break;
         }
@@ -209,15 +194,16 @@ public:
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool has_underscore = std::regex_match(name, final_underscore);
 
+          bool matches_UPPER_CASE = std::regex_match(name, is_UPPER_CASE);
+          auto varType = f->getType();
+          bool is_const = varType.isConstQualified();
+
           if (!matches_camelCase || !has_underscore) {
-            lineIssues.emplace_back(
-              SM.getFilename(start),
-              SM.getPresumedLineNumber(start),
-              SM.getPresumedColumnNumber(start),
-              "Found a non-camelCase_ field name" + f->getQualifiedNameAsString(),
-              code,
-              Severity::ERROR
-            );
+            addIssue( SM, range, lineIssues,
+                      "Found a non-camelCase_ data member: " +
+                        f->getQualifiedNameAsString() +
+                        (is_const && matches_UPPER_CASE ?
+                           " (should this be a 'static constexpr' data member?)" : "" ));
           }
           break;
         }
@@ -236,17 +222,15 @@ public:
           if (!matches_CamelCase || !has_underscore) {
             std::string kind = f->isClass() ? "class" :
                                  (f->isStruct() ? "struct" : "union");
-            lineIssues.emplace_back(
-              SM.getFilename(start),
-              SM.getPresumedLineNumber(start),
-              SM.getPresumedColumnNumber(start),
-              "Found a non-CamelCase " + kind + " name: " + f->getQualifiedNameAsString(),
-              code,
-              Severity::ERROR
-            );
+            addIssue( SM, range, lineIssues,
+                      "Found a non-CamelCase " + kind + " name: " +
+                        f->getQualifiedNameAsString() );
           }
           break;
         }
+
+    default:
+        break;
 
 /*
       case Decl::Block:
@@ -328,11 +312,32 @@ public:
 
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
-    SourceLocation start = expr->getLocStart();
+    SourceRange range = expr->getSourceRange();
 
-    std::cout << "Found call using (*foo).bar(...) notation instead of foo->bar(...) notation at "
-              << start.printToString(SM)
-        << std::endl;
+    addIssue( SM, range, lineIssues,
+        "Found a call using (*foo).bar(...) notation instead of foo->bar(...) notation");
+  }
+
+private:
+  Replacements* Replace;
+};
+
+class ProcessMemberProj : public MatchFinder::MatchCallback {
+public:
+  ProcessMemberProj(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    // Get the matched class-declaration AST node
+    const MemberExpr *expr = Result.Nodes.getNodeAs<MemberExpr>("projWithPointer");
+
+    expr->dump();
+
+    // Get the source location of that declaration
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = expr->getSourceRange();
+
+    addIssue( SM, range, lineIssues,
+        "Using '->' would be better!");
   }
 
 private:
@@ -350,11 +355,9 @@ public:
 
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
-    SourceLocation start = decl->getLocStart();
+    SourceRange range = decl->getSourceRange();
 
-    std::cout << "Go To Statement Considered Harmful. "
-              << start.printToString(SM)
-        << std::endl;
+    addIssue( SM, range, lineIssues, "Go To statement considered harmful.");
   }
 
 private:
@@ -367,26 +370,51 @@ public:
 
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched `this' AST node, NOT the whole this->foo expression!
-    const CXXThisExpr* stmt = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
-    if (stmt->isImplicit()) {
+    const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
+    const CXXMemberCallExpr* callExpr = Result.Nodes.getNodeAs<CXXMemberCallExpr>("myCall");
+
+    if (thisExpr->isImplicit()) {
         // Don't yell at the user for implicit `this'!
         return;
     }
 
-    if (0) {
-        /* This is just here to trigger the this->f() test */
-        this->run(Result);
-        /* ... and this is here to not trigger it! */
-        run(Result);
-    }
+
 
     // Get the source location of that statement
     SourceManager& SM = *Result.SourceManager;
-    SourceLocation start = stmt->getLocStart();
+    SourceRange range = callExpr->getSourceRange();
 
-    std::cerr << "Found an explicit use of this->foo() instead of foo() at "
-              << start.printToString(SM)
-              << std::endl;
+    addIssue( SM, range, lineIssues, "Explicit use of this->foo() instead of foo()");
+  }
+
+private:
+  Replacements* Replace;
+};
+
+class ProcessThisProj : public MatchFinder::MatchCallback {
+public:
+  ProcessThisProj(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    // Get the matched `this' AST node, NOT the whole this->foo expression!
+    const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
+    const MemberExpr* projExpr = Result.Nodes.getNodeAs<MemberExpr>("projection");
+
+    if (thisExpr->isImplicit()) {
+        // Don't yell at the user for implicit `this'!
+        return;
+    }
+
+    //projExpr->dump();
+
+    // Get the source location of that statement
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = projExpr->getSourceRange();
+
+    std::string fieldName = projExpr->getMemberNameInfo().getAsString();
+
+    addIssue( SM, range, lineIssues,
+        "Expression could be simplified to just '" + fieldName + "'");
   }
 
 private:
@@ -407,39 +435,45 @@ int main(int argc, const char **argv) {
 
   // Create callback object(s) for each rule.
   ProcessMemberCall cb5(&Tool.getReplacements());
+  ProcessMemberProj cb9(&Tool.getReplacements());
   ProcessGotoStmt cb6(&Tool.getReplacements());
   ProcessThisCall  cb7(&Tool.getReplacements());
+  ProcessThisProj  cb8(&Tool.getReplacements());
   ProcessDecl  cbDecl(&Tool.getReplacements());
 
-/*
-  // Add the rules, and the associated callbacks
-  Finder.addMatcher(
-      usingDirectiveDecl(unless(isExpansionInSystemHeader()),
-                         isExpansionInFileMatching("\\.hpp$")).bind("namespace"),
-      &cb1);
-
 
   Finder.addMatcher(
-      fieldDecl(unless(isExpansionInSystemHeader()),
-                matchesName("[^_]$")                 ).bind("dataMember"),
-      &cb2);
-
-  // This matcher matches all variable declarations. We filter out the non-local ones in
-  // ProcessVariableWithUnderscore's run() method.
-  Finder.addMatcher(
-      varDecl(unless(isExpansionInSystemHeader()),
-              matchesName("_$")                    ).bind("variable"),
-      &cb3);
-
-  Finder.addMatcher(
-      recordDecl(unless(isExpansionInSystemHeader()),
-                 matchesName("::[^A-Z]")              ).bind("class"),
-      &cb4);
-
-  Finder.addMatcher(
+      // Look for invocations (*p).method(...)
+      //  But only where p is a pointer. Otherwise, it _might_ be reasonable.
+      //  (e.g., if p belongs to a class that did not implement ->.)
       memberCallExpr(unless(isExpansionInSystemHeader()),
-                     on(unaryOperator(hasOperatorName("*")))).bind("callWithPointer"),
+                     on(unaryOperator(hasOperatorName("*"),
+                                      hasUnaryOperand(expr(hasType(pointerType())))))
+          ).bind("callWithPointer"),
       &cb5);
+
+  Finder.addMatcher(
+      // Look for invocations (*p).field_
+      //  But only where p is a pointer. Otherwise, it _might_ be reasonable.
+      //  (e.g., if p belongs to a class that did not implement ->.)
+      memberExpr(
+          unless(isExpansionInSystemHeader()),
+          hasObjectExpression(
+             parenExpr(
+               has(
+                 unaryOperator(
+                   hasOperatorName("*"),
+                   hasUnaryOperand(
+                     expr(unless(thisExpr()),
+                          hasType(pointerType())
+                     )
+                   )
+                 )
+               )
+             )
+           )
+         ).bind("projWithPointer"),
+      &cb9);
 
   Finder.addMatcher(
       gotoStmt(unless(isExpansionInSystemHeader())).bind("goto"),
@@ -447,12 +481,48 @@ int main(int argc, const char **argv) {
 
   Finder.addMatcher(
       memberCallExpr(
-          on(thisExpr().bind("myThis")),
-          unless(isExpansionInSystemHeader())),
+          unless(isExpansionInSystemHeader()),
+          on(anyOf(thisExpr().bind("myThis"),
+                   unaryOperator(hasOperatorName("*"),
+                                 hasUnaryOperand(thisExpr().bind("myThis")))))
+          ).bind("myCall"),
       &cb7);
-*/
+
   Finder.addMatcher(
-      decl(unless(isExpansionInSystemHeader())).bind("decl"),
+      memberExpr(
+          unless(isExpansionInSystemHeader()),
+          hasObjectExpression(
+             parenExpr(
+               has(
+                 unaryOperator(
+                   hasOperatorName("*"),
+                   hasUnaryOperand(
+                     thisExpr().bind("myThis")
+                   )
+                 )
+               )
+             )
+           ),
+          // Some implicitly-generated code seems to use "this->"
+          unless(hasAncestor(isImplicit()))
+         ).bind("projection"),
+      &cb8);
+
+  Finder.addMatcher(
+      memberExpr(
+          hasObjectExpression(thisExpr().bind("myThis")),
+          unless(isExpansionInSystemHeader()),
+          // Some implicitly-generated code seems to use this->
+          unless(hasAncestor(isImplicit()))
+          ).bind("projection"),
+      &cb8);
+
+
+  Finder.addMatcher(
+      // ignore declarations in expanded templates, for now.
+      // Otherwise, we get errors about names in templates both it they are defined
+      //    *and* when they are (usually implicitly) instantiated
+      decl(unless(anyOf(isExpansionInSystemHeader(), isInstantiated()))).bind("decl"),
       &cbDecl);
 
   // Run everything. If we suggested doing any replacements,
@@ -475,51 +545,4 @@ int main(int argc, const char **argv) {
   }
 
 }
-
-/*
-
-#include <iostream>
-#include <fstream>
-#include <streambuf>
-#include <string>
-#include <cstring>
-#include <vector>
-#include <algorithm>
-
-#include "issue.hpp"
-#include "declcheck.hpp"
-
-using namespace std;
-
-const string USAGE_MESSAGE = "usage:\nstylecheck [--html] filename";
-
-
-int main(int argc, char** argv) {
-
-  //We need at least 2 arguments to work
-  if (argc < 2) {
-    cout << USAGE_MESSAGE << endl;
-    return 1;
-  }
-
-  //Parse the arguments
-  int i = 0;
-  for(; i < argc-1; ++i) {
-    if (strcmp(argv[i], "--html") == 0) {
-      HTMLoutput = true;
-    }
-  }
-
-  //Get the filename
-  string filename{argv[i]};
-
-
-
-
-
-
-
-  return 0;
-}
-*/
 
