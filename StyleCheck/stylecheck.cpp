@@ -675,7 +675,9 @@ int main(int argc, const char **argv) {
       // ignore declarations in expanded templates, for now.
       // Otherwise, we get errors about names in templates both it they are defined
       //    *and* when they are (usually implicitly) instantiated
-      decl(unless(anyOf(isExpansionInSystemHeader(), isInstantiated()))).bind("decl"),
+      decl(unless(anyOf(isExpansionInSystemHeader(),
+                        isInstantiated(),
+                        hasParent(catchStmt())))).bind("decl"),
       &cbDecl);
 
   Finder.addMatcher(
