@@ -1,4 +1,5 @@
 #include "clang/AST/ASTConsumer.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Driver/Options.h"
@@ -74,6 +75,44 @@ std::regex is_UPPER_CASE = std::regex("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*");
 std::regex is_internal = std::regex("__[A-Za-z0-9]*");
 
 std::regex is_headerFile = std::regex(".*\\.h(pp)?");
+
+
+/////////////////////////////
+// Cyclomatic Complexity
+/////////////////////////////
+
+class Cyclomatic : public RecursiveASTVisitor<Cyclomatic> {
+public:
+  bool VisitForStmt(ForStmt*) {
+    ++count_;
+    return true;
+  }
+  bool VisitIfStmt(IfStmt*) {
+    ++count_;
+    return true;
+  }
+  bool VisitWhileStmt(WhileStmt*) {
+    ++count_;
+    return true;
+  }
+  bool VisitSwitchStmt(SwitchStmt*) {
+    ++count_;
+    return true;
+  }
+  bool VisitCXXCatchStmt(CXXCatchStmt*) {
+    ++count_;
+    return true;
+  }
+  bool VisitBinaryOperator(BinaryOperator* b) {
+    auto op = b->getOpcode();
+    if (op == BO_LAnd || op == BO_LOr) ++count_;
+    return true;
+  }
+
+  size_t getComplexity() { return count_; }
+private:
+  size_t count_ = 1;
+};
 
 ///////////////////////////////
 // Callbacks for Nodes Found
@@ -165,8 +204,9 @@ public:
           if (! f->doesThisDeclarationHaveABody()) break;
 
           std::string name = f->getNameAsString();
+          Stmt* body = f->getBody();
 
-          range.setEnd(f->getBody()->getLocStart());
+          range.setEnd(body->getLocStart());
 
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool matches_operator = std::regex_match(name, is_operator);
@@ -175,8 +215,16 @@ public:
           if ( (! matches_camelCase || has_underscore) &&
                ! matches_operator) {
             addIssue( SM, range, lineIssues,
-                      "Found non-camelCase function name: " +
-                         f->getQualifiedNameAsString() );
+                      "Found non-camelCase function name: " + name);
+          }
+
+          Cyclomatic cyc;
+          cyc.TraverseStmt(body);
+          auto complexity = cyc.getComplexity();
+          if ( complexity > 10) {
+             addIssue (SM, range, lineIssues,
+                        "Function " + name + " has complexity " + to_string(complexity) +
+                        "; aim for below 10 (15 in extremity).");
           }
           break;
         }
