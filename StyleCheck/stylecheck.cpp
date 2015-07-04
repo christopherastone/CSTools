@@ -559,7 +559,7 @@ public:
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = expr->getSourceRange();
 
-    addIssue( SM, range, lineIssues, "Modern C++ uses nullptr instead of NULL");
+    addIssue( SM, range, lineIssues, "Modern C++ uses nullptr");
   }
 
 private:
@@ -746,6 +746,14 @@ int main(int argc, const char **argv) {
   Finder.addMatcher(
       gnuNullExpr(
         unless(isExpansionInSystemHeader())
+       ).bind("expr"),
+      &cb13);
+
+  Finder.addMatcher(
+      implicitCastExpr(
+        has(integerLiteral(equals(0))),
+        unless(isExpansionInSystemHeader()),
+        hasImplicitDestinationType(pointerType())
        ).bind("expr"),
       &cb13);
 
