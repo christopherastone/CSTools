@@ -137,8 +137,6 @@ void addIssue(const SourceManager& SM, const SourceRange& range,
 
 class ProcessDecl : public MatchFinder::MatchCallback {
 public:
-  ProcessDecl(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched class-declaration AST node
     const Decl *decl = Result.Nodes.getNodeAs<Decl>("decl");
@@ -329,16 +327,11 @@ public:
         */
     }
   }
-
-private:
-  Replacements* Replace;
 };
 
 
 class ProcessMemberCall : public MatchFinder::MatchCallback {
 public:
-  ProcessMemberCall(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched class-declaration AST node
     const CXXMemberCallExpr *expr = Result.Nodes.getNodeAs<CXXMemberCallExpr>("callWithPointer");
@@ -350,15 +343,10 @@ public:
     addIssue( SM, range, lineIssues,
         "Found a call using (*foo).bar(...) notation instead of foo->bar(...) notation");
   }
-
-private:
-  Replacements* Replace;
 };
 
 class ProcessMemberProj : public MatchFinder::MatchCallback {
 public:
-  ProcessMemberProj(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched class-declaration AST node
     const MemberExpr *expr = Result.Nodes.getNodeAs<MemberExpr>("projWithPointer");
@@ -372,16 +360,11 @@ public:
     addIssue( SM, range, lineIssues,
         "Using '->' would be better!");
   }
-
-private:
-  Replacements* Replace;
 };
 
 
 class ProcessGotoStmt : public MatchFinder::MatchCallback {
 public:
-  ProcessGotoStmt(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched class-declaration AST node
     const GotoStmt *decl = Result.Nodes.getNodeAs<GotoStmt>("goto");
@@ -392,16 +375,11 @@ public:
 
     addIssue( SM, range, lineIssues, "Go To statement considered harmful.");
   }
-
-private:
-  Replacements* Replace;
 };
 
 /*
 class ProcessThisCall : public MatchFinder::MatchCallback {
 public:
-  ProcessThisCall(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched `this' AST node, NOT the whole this->foo expression!
     const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
@@ -422,16 +400,11 @@ public:
 
     addIssue( SM, range, lineIssues, "Explicit use of this->foo() instead of foo()");
   }
-
-private:
-  Replacements* Replace;
 };
 */
 
 class ProcessThisProj : public MatchFinder::MatchCallback {
 public:
-  ProcessThisProj(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched `this' AST node, NOT the whole this->foo expression!
     const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
@@ -453,15 +426,10 @@ public:
     addIssue( SM, range, lineIssues,
         "Expression could be simplified to just '" + fieldName + "'");
   }
-
-private:
-  Replacements* Replace;
 };
 
 class ProcessIncDec : public MatchFinder::MatchCallback {
 public:
-  ProcessIncDec(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched `this' AST node, NOT the whole this->foo expression!
     const UnaryOperator* incExpr = Result.Nodes.getNodeAs<UnaryOperator>("increment");
@@ -478,15 +446,11 @@ public:
     addIssue( SM, range, lineIssues,
         "Pre-" + operation + " is preferred to post-" + operation + " in idiomatic C++");
   }
-
-private:
-  Replacements* Replace;
 };
 
+// XXX: Complains about #defined constants such as RAND_MAX
 class ProcessMagicNumbers : public MatchFinder::MatchCallback {
 public:
-  ProcessMagicNumbers(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     // Get the matched `this' AST node, NOT the whole this->foo expression!
     const Expr* expr = Result.Nodes.getNodeAs<Expr>("literal");
@@ -509,15 +473,10 @@ public:
 
     addIssue( SM, range, lineIssues, "Is this a magic number?");
   }
-
-private:
-  Replacements* Replace;
 };
 
 class ProcessEqBool : public MatchFinder::MatchCallback {
 public:
-  ProcessEqBool(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     const BinaryOperator* expr = Result.Nodes.getNodeAs<BinaryOperator>("expr");
     const CXXBoolLiteralExpr* boolLit = Result.Nodes.getNodeAs<CXXBoolLiteralExpr>("bool");
@@ -543,15 +502,10 @@ public:
       }
     }
   }
-
-private:
-  Replacements* Replace;
 };
 
 class ProcessNull : public MatchFinder::MatchCallback {
 public:
-  ProcessNull(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
 
@@ -561,15 +515,10 @@ public:
 
     addIssue( SM, range, lineIssues, "Modern C++ uses nullptr");
   }
-
-private:
-  Replacements* Replace;
 };
 
 class ProcessCCast : public MatchFinder::MatchCallback {
 public:
-  ProcessCCast(Replacements* Replace) : Replace(Replace) {}
-
   virtual void run(const MatchFinder::MatchResult &Result) {
     const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
 
@@ -579,9 +528,6 @@ public:
 
     addIssue( SM, range, lineIssues, "Modern C++ avoids C-style casts");
   }
-
-private:
-  Replacements* Replace;
 };
 ////////////////////////
 //  main
@@ -591,22 +537,22 @@ int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal();
 
   CommonOptionsParser OptionsParser(argc, argv, StyleCheckCategory);
-  tooling::RefactoringTool Tool(OptionsParser.getCompilations(),
-                                OptionsParser.getSourcePathList());
+  tooling::ClangTool Tool(OptionsParser.getCompilations(),
+                          OptionsParser.getSourcePathList());
   MatchFinder Finder;
 
   // Create callback object(s) for each rule.
-  ProcessMemberCall cb5(&Tool.getReplacements());
-  ProcessMemberProj cb9(&Tool.getReplacements());
-  ProcessGotoStmt cb6(&Tool.getReplacements());
-//  ProcessThisCall  cb7(&Tool.getReplacements());
-  ProcessThisProj  cb8(&Tool.getReplacements());
-  ProcessDecl  cbDecl(&Tool.getReplacements());
-  ProcessIncDec cb10(&Tool.getReplacements());
-  ProcessMagicNumbers cb11(&Tool.getReplacements());
-  ProcessEqBool cb12(&Tool.getReplacements());
-  ProcessNull cb13(&Tool.getReplacements());
-  ProcessCCast cb14(&Tool.getReplacements());
+  ProcessMemberCall cb5;
+  ProcessMemberProj cb9;
+  ProcessGotoStmt cb6;
+//  ProcessThisCall  cb7;
+  ProcessThisProj  cb8;
+  ProcessDecl  cbDecl;
+  ProcessIncDec cb10;
+  ProcessMagicNumbers cb11;
+  ProcessEqBool cb12;
+  ProcessNull cb13;
+  ProcessCCast cb14;
 
   Finder.addMatcher(
       // Look for invocations (*p).method(...)
