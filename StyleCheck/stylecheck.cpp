@@ -566,6 +566,23 @@ private:
   Replacements* Replace;
 };
 
+class ProcessCCast : public MatchFinder::MatchCallback {
+public:
+  ProcessCCast(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
+
+    // Get the source location of that statement
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = expr->getSourceRange();
+
+    addIssue( SM, range, lineIssues, "Modern C++ avoids C-style casts");
+  }
+
+private:
+  Replacements* Replace;
+};
 ////////////////////////
 //  main
 ///////////////////////
@@ -589,6 +606,7 @@ int main(int argc, const char **argv) {
   ProcessMagicNumbers cb11(&Tool.getReplacements());
   ProcessEqBool cb12(&Tool.getReplacements());
   ProcessNull cb13(&Tool.getReplacements());
+  ProcessCCast cb14(&Tool.getReplacements());
 
   Finder.addMatcher(
       // Look for invocations (*p).method(...)
@@ -758,6 +776,14 @@ int main(int argc, const char **argv) {
         hasImplicitDestinationType(pointerType())
        ).bind("expr"),
       &cb13);
+
+  Finder.addMatcher(
+      cStyleCastExpr(
+        unless(isExpansionInSystemHeader()),
+        // the assert macro seems to do the cast (void)0
+        unless(has(integerLiteral(equals(0))))
+       ).bind("expr"),
+      &cb14);
 
   // Run everything. If we suggested doing any replacements,
   // save the changes to disk
