@@ -16,6 +16,7 @@
 
 #include <iostream>
 #include <regex>
+#include <set>
 
 #include "issue.hpp"
 
@@ -27,6 +28,17 @@
 namespace clang {
   namespace ast_matchers {
     const internal::VariadicDynCastAllOfMatcher<Stmt, ParenExpr> parenExpr;
+    const internal::VariadicDynCastAllOfMatcher<Stmt, UnresolvedLookupExpr> unresolvedLookupExpr;
+
+    AST_MATCHER(FunctionDecl, isDefaulted) { return Node.isDefaulted(); }
+    AST_MATCHER(UnresolvedLookupExpr, isSystemURE) {
+      std::string callee = Node.getName().getAsString();
+      //std::cerr << "CALLEE: " << callee << std::endl;
+      // Check for a __ prefix
+      std::string uu = "__";
+      if (callee.size() < 2) return false;
+      return std::mismatch(uu.begin(), uu.end(), callee.begin()).first == uu.end();
+    }
   }
 }
 
@@ -49,7 +61,7 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 //static cl::extrahelp MoreHelp("\nMore help text...");
 
 
-std::vector<Issue> lineIssues;
+std::set<Issue> lineIssues;
 
 
 std::regex is_camelCase = std::regex("(.*::)?[a-z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
@@ -69,7 +81,7 @@ std::regex is_headerFile = std::regex(".*\\.h(pp)?");
 
 
 void addIssue(const SourceManager& SM, const SourceRange& range,
-              vector<Issue>& v, std::string message, Severity sev = Severity::WARNING)
+              std::set<Issue>& v, std::string message, Severity sev = Severity::WARNING)
 {
   SourceLocation start = range.getBegin();
   SourceLocation stop  = range.getEnd();
@@ -77,20 +89,21 @@ void addIssue(const SourceManager& SM, const SourceRange& range,
   size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOptions());
   std::string code = "...code not available...";
 
-  //if (SM.isMacroArgExpansion(start)) start = SM.getFileLoc(start);
-  //if (SM.isMacroArgExpansion(stop )) stop  = SM.getFileLoc(stop);
+  if (SM.isMacroArgExpansion(start)) start = SM.getFileLoc(start);
+  if (SM.isMacroArgExpansion(stop )) stop  = SM.getFileLoc(stop);
 
   if (SM.isWrittenInSameFile(start, stop)) {
     ptrdiff_t len = SM.getCharacterData(stop)-SM.getCharacterData(start)+offset;
-    if (len >= 0 && len < 10000) {
+    if (len >= 0 && len < 1000) {
       code = std::string(SM.getCharacterData(start), len);
     }
   }
 
-  v.emplace_back( SM.getFilename(start),
-                  SM.getPresumedLineNumber(start),
-                  SM.getPresumedColumnNumber(start),
-                  message, code, sev );
+  v.emplace( SM.getFilename(start),
+             SM.getPresumedLineNumber(start),
+             SM.getPresumedColumnNumber(start),
+             message, code, sev );
+
 }
 
 
@@ -330,7 +343,7 @@ public:
     // Get the matched class-declaration AST node
     const MemberExpr *expr = Result.Nodes.getNodeAs<MemberExpr>("projWithPointer");
 
-    expr->dump();
+    //expr->dump();
 
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
@@ -364,6 +377,7 @@ private:
   Replacements* Replace;
 };
 
+/*
 class ProcessThisCall : public MatchFinder::MatchCallback {
 public:
   ProcessThisCall(Replacements* Replace) : Replace(Replace) {}
@@ -373,12 +387,14 @@ public:
     const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
     const CXXMemberCallExpr* callExpr = Result.Nodes.getNodeAs<CXXMemberCallExpr>("myCall");
 
+
     if (thisExpr->isImplicit()) {
         // Don't yell at the user for implicit `this'!
         return;
     }
 
 
+    callExpr->dump();
 
     // Get the source location of that statement
     SourceManager& SM = *Result.SourceManager;
@@ -390,6 +406,7 @@ public:
 private:
   Replacements* Replace;
 };
+*/
 
 class ProcessThisProj : public MatchFinder::MatchCallback {
 public:
@@ -421,6 +438,61 @@ private:
   Replacements* Replace;
 };
 
+class ProcessIncDec : public MatchFinder::MatchCallback {
+public:
+  ProcessIncDec(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    // Get the matched `this' AST node, NOT the whole this->foo expression!
+    const UnaryOperator* incExpr = Result.Nodes.getNodeAs<UnaryOperator>("increment");
+
+    if (incExpr->isPrefix()) return;
+
+    std::string operation =
+      (incExpr->isIncrementOp() ? "increment" : "decrement");
+
+    // Get the source location of that statement
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = incExpr->getSourceRange();
+
+    addIssue( SM, range, lineIssues,
+        "Pre-" + operation + " is preferred to post-" + operation + " in idiomatic C++");
+  }
+
+private:
+  Replacements* Replace;
+};
+
+class ProcessMagicNumbers : public MatchFinder::MatchCallback {
+public:
+  ProcessMagicNumbers(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    // Get the matched `this' AST node, NOT the whole this->foo expression!
+    const Expr* expr = Result.Nodes.getNodeAs<Expr>("literal");
+
+    //expr->dump();
+
+    if (const IntegerLiteral* litExpr = Result.Nodes.getNodeAs<IntegerLiteral>("literal")) {
+      auto value = litExpr->getValue();
+      if (value == -1 || value == 0 || value == 1 || value == 2) return;
+    } else if (const FloatingLiteral* fltExpr = Result.Nodes.getNodeAs<FloatingLiteral>("literal")) {
+      auto value = fltExpr->getValueAsApproximateDouble();
+      if (value == 0.0 || value == 1.0 || value == -1.0) return;
+    } else {
+      cerr << "CAN'T UNDERSTAND LITERAL!" << endl;
+    }
+
+    // Get the source location of that statement
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = expr->getSourceRange();
+
+    addIssue( SM, range, lineIssues, "Is this a magic number?");
+  }
+
+private:
+  Replacements* Replace;
+};
 ////////////////////////
 //  main
 ///////////////////////
@@ -437,10 +509,11 @@ int main(int argc, const char **argv) {
   ProcessMemberCall cb5(&Tool.getReplacements());
   ProcessMemberProj cb9(&Tool.getReplacements());
   ProcessGotoStmt cb6(&Tool.getReplacements());
-  ProcessThisCall  cb7(&Tool.getReplacements());
+//  ProcessThisCall  cb7(&Tool.getReplacements());
   ProcessThisProj  cb8(&Tool.getReplacements());
   ProcessDecl  cbDecl(&Tool.getReplacements());
-
+  ProcessIncDec cb10(&Tool.getReplacements());
+  ProcessMagicNumbers cb11(&Tool.getReplacements());
 
   Finder.addMatcher(
       // Look for invocations (*p).method(...)
@@ -478,7 +551,8 @@ int main(int argc, const char **argv) {
   Finder.addMatcher(
       gotoStmt(unless(isExpansionInSystemHeader())).bind("goto"),
       &cb6);
-
+/*
+  // Seems to be handled by the MemberExpr catcher.
   Finder.addMatcher(
       memberCallExpr(
           unless(isExpansionInSystemHeader()),
@@ -487,6 +561,7 @@ int main(int argc, const char **argv) {
                                  hasUnaryOperand(thisExpr().bind("myThis")))))
           ).bind("myCall"),
       &cb7);
+*/
 
   Finder.addMatcher(
       memberExpr(
@@ -504,19 +579,22 @@ int main(int argc, const char **argv) {
              )
            ),
           // Some implicitly-generated code seems to use "this->"
-          unless(hasAncestor(isImplicit()))
+          unless(hasAncestor(isImplicit())),
+          unless(hasAncestor(functionDecl(isDefaulted())))
          ).bind("projection"),
       &cb8);
+
 
   Finder.addMatcher(
       memberExpr(
           hasObjectExpression(thisExpr().bind("myThis")),
           unless(isExpansionInSystemHeader()),
           // Some implicitly-generated code seems to use this->
-          unless(hasAncestor(isImplicit()))
+          unless(hasAncestor(isImplicit())),
+          // Code generated by =default  seems to use this->
+          unless(hasAncestor(functionDecl(isDefaulted())))
           ).bind("projection"),
       &cb8);
-
 
   Finder.addMatcher(
       // ignore declarations in expanded templates, for now.
@@ -525,12 +603,51 @@ int main(int argc, const char **argv) {
       decl(unless(anyOf(isExpansionInSystemHeader(), isInstantiated()))).bind("decl"),
       &cbDecl);
 
+  Finder.addMatcher(
+       unaryOperator(
+          unless(isExpansionInSystemHeader()),
+          anyOf(hasOperatorName("++"),hasOperatorName("--")),
+          unless(hasParent(expr()))
+         ).bind("increment"),
+      &cb10);
+
+  Finder.addMatcher(
+      integerLiteral(
+         unless(equals(0)),  // Optimization?
+         unless(equals(1)),  // Optimization?
+         unless(isExpansionInSystemHeader()),
+         unless(hasParent(decl())),
+         unless(hasParent(implicitCastExpr(hasParent(decl())))),
+         // Things like assert() create constant line numbers.
+         unless(hasAncestor(callExpr(callee(namedDecl(matchesName("__")))))),
+         // Sometimes assert beomces an unresolvedLookupExpr
+         unless(hasAncestor(callExpr(callee(unresolvedLookupExpr(isSystemURE()))))),
+         // e.g., the constants in primeLessthan
+         unless(hasParent(initListExpr()))
+        ).bind("literal"),
+      &cb11);
+
+  Finder.addMatcher(
+      floatLiteral(
+         unless(equals(0.0)),  // Optimization?
+         unless(equals(1.0)),  // Optimization?
+         unless(isExpansionInSystemHeader()),
+         unless(hasParent(decl())),
+         unless(hasParent(implicitCastExpr(hasParent(decl())))),
+         // e.g., the constants in primeLessthan
+         unless(hasParent(initListExpr()))
+        ).bind("literal"),
+      &cb11);
+
   // Run everything. If we suggested doing any replacements,
   // save the changes to disk
   Tool.run(newFrontendActionFactory(&Finder).get());
 
-  //Sort the issues by line number
-  std::sort(lineIssues.begin(), lineIssues.end());
+  // lineissues is now a set, not a vector.
+  // Sort the issues by line number
+  //   std::sort(lineIssues.begin(), lineIssues.end());
+  // Remove duplicates (inefficiently!)
+  //   lineIssues.erase( unique( lineIssues.begin(), lineIssues.end() ), lineIssues.end() );
 
   //Produce either terminal or HTML output
   if (HTMLoutput) {

@@ -20,6 +20,9 @@ Issue::Issue(std::string file, int line, int col, std::string title, std::string
   message_{message},
   severity_{severity}
 {
+  file_ = file;
+/*
+  // Simplify output
   file = boost::filesystem::canonical(file).string();
   if (cwd_.size() < file.size()) {
   auto pair = std::mismatch(cwd_.begin(), cwd_.end(), file.begin());
@@ -27,12 +30,26 @@ Issue::Issue(std::string file, int line, int col, std::string title, std::string
   } else {
     file_ = file;
   }
+  */
 }
 
 bool Issue::operator<(const Issue& rhs) const
 {
   return file_ < rhs.file_ ||
-         (file_ == rhs.file_ && line_ < rhs.line_);
+          (file_ == rhs.file_ &&
+           (line_ < rhs.line_ ||
+            (line_ == rhs.line_ &&
+             column_ < rhs.column_)));
+}
+
+bool Issue::operator==(const Issue& rhs) const
+{
+  return (file_ == rhs.file_) && (line_ == rhs.line_) && (column_ == rhs.column_);
+}
+
+bool Issue::operator!=(const Issue& rhs) const
+{
+  return ! operator==(rhs);
 }
 
 std::string Issue::getSeverityANSI() const

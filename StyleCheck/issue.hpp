@@ -14,6 +14,8 @@ public:
         std::string message, Severity severity);
 
   bool operator<(const Issue&) const;
+  bool operator==(const Issue&) const;
+  bool operator!=(const Issue&) const;
   std::string getText() const;
   std::string getHTML() const;
 
