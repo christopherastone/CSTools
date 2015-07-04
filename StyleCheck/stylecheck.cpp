@@ -493,6 +493,41 @@ public:
 private:
   Replacements* Replace;
 };
+
+class ProcessEqBool : public MatchFinder::MatchCallback {
+public:
+  ProcessEqBool(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    const BinaryOperator* expr = Result.Nodes.getNodeAs<BinaryOperator>("expr");
+    const CXXBoolLiteralExpr* boolLit = Result.Nodes.getNodeAs<CXXBoolLiteralExpr>("bool");
+
+    bool trueConst = boolLit->getValue();
+    bool equality = expr->getOpcode() == BO_EQ;
+
+    // Get the source location of that statement
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = expr->getSourceRange();
+
+    if (trueConst) {
+      if (equality) {
+        addIssue( SM, range, lineIssues, "Redundant (or buggy!) \"== true\"");
+      } else {
+        addIssue( SM, range, lineIssues, "The prefix ! (not) operator would be more idiomatic");
+      }
+    } else {
+      if (equality) {
+        addIssue( SM, range, lineIssues, "The prefix ! (not) operator would be more idiomatic");
+      } else {
+        addIssue( SM, range, lineIssues, "Redundant \"!= false\"");
+      }
+    }
+  }
+
+private:
+  Replacements* Replace;
+};
+
 ////////////////////////
 //  main
 ///////////////////////
@@ -514,6 +549,7 @@ int main(int argc, const char **argv) {
   ProcessDecl  cbDecl(&Tool.getReplacements());
   ProcessIncDec cb10(&Tool.getReplacements());
   ProcessMagicNumbers cb11(&Tool.getReplacements());
+  ProcessEqBool cb12(&Tool.getReplacements());
 
   Finder.addMatcher(
       // Look for invocations (*p).method(...)
@@ -638,6 +674,18 @@ int main(int argc, const char **argv) {
          unless(hasParent(initListExpr()))
         ).bind("literal"),
       &cb11);
+
+  Finder.addMatcher(
+      binaryOperator(
+         unless(isExpansionInSystemHeader()),
+         anyOf(hasOperatorName("=="),
+               hasOperatorName("!=") ),
+         anyOf(hasLHS(boolLiteral().bind("bool")),
+               hasLHS(implicitCastExpr(has(boolLiteral().bind("bool")))),
+               hasRHS(boolLiteral().bind("bool")),
+               hasRHS(implicitCastExpr(has(boolLiteral().bind("bool")))) )
+        ).bind("expr"),
+      &cb12);
 
   // Run everything. If we suggested doing any replacements,
   // save the changes to disk

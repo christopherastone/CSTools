@@ -20,17 +20,16 @@ Issue::Issue(std::string file, int line, int col, std::string title, std::string
   message_{message},
   severity_{severity}
 {
-  file_ = file;
-/*
-  // Simplify output
-  file = boost::filesystem::canonical(file).string();
-  if (cwd_.size() < file.size()) {
-  auto pair = std::mismatch(cwd_.begin(), cwd_.end(), file.begin());
-  file_ = std::string{pair.second, end(file)};
-  } else {
-    file_ = file;
+  if (file != "") {
+    // Simplify output
+    file = boost::filesystem::canonical(file).string();
+    if (cwd_.size() < file.size()) {
+    auto pair = std::mismatch(cwd_.begin(), cwd_.end(), file.begin());
+    file_ = std::string{pair.second, end(file)};
+    } else {
+      file_ = file;
+    }
   }
-  */
 }
 
 bool Issue::operator<(const Issue& rhs) const
