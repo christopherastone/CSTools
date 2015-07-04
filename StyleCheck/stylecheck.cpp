@@ -86,11 +86,31 @@ void addIssue(const SourceManager& SM, const SourceRange& range,
   SourceLocation start = range.getBegin();
   SourceLocation stop  = range.getEnd();
 
+  // Adapted from http://lists.cs.uiuc.edu/pipermail/cfe-commits/Week-of-Mon-20121022/066863.html
+  while (start.isMacroID())
+      start = SM.getImmediateMacroCallerLoc(start);
+
+  FileID LocFileID = SM.getFileID(start);
+
+   while (stop.isMacroID() && SM.getFileID(stop) != LocFileID) {
+      // The computation of the next End is an inlined version of
+      // getImmediateMacroCallerLoc, except it chooses the end of an
+      // expansion range.
+      if (SM.isMacroArgExpansion(stop)) {
+        stop = SM.getImmediateSpellingLoc(stop);
+      } else {
+        stop = SM.getImmediateExpansionRange(stop).second;
+      }
+    }
+
+    start = SM.getSpellingLoc(start);
+    stop = SM.getSpellingLoc(stop);
+
   size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOptions());
   std::string code = "...code not available...";
 
-  if (SM.isMacroArgExpansion(start)) start = SM.getFileLoc(start);
-  if (SM.isMacroArgExpansion(stop )) stop  = SM.getFileLoc(stop);
+  //if (SM.isMacroArgExpansion(start)) start = SM.getFileLoc(start);
+  //if (SM.isMacroArgExpansion(stop )) stop  = SM.getFileLoc(stop);
 
   if (SM.isWrittenInSameFile(start, stop)) {
     ptrdiff_t len = SM.getCharacterData(stop)-SM.getCharacterData(start)+offset;
@@ -528,6 +548,24 @@ private:
   Replacements* Replace;
 };
 
+class ProcessNull : public MatchFinder::MatchCallback {
+public:
+  ProcessNull(Replacements* Replace) : Replace(Replace) {}
+
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
+
+    // Get the source location of that statement
+    SourceManager& SM = *Result.SourceManager;
+    SourceRange range = expr->getSourceRange();
+
+    addIssue( SM, range, lineIssues, "Modern C++ uses nullptr instead of NULL");
+  }
+
+private:
+  Replacements* Replace;
+};
+
 ////////////////////////
 //  main
 ///////////////////////
@@ -550,6 +588,7 @@ int main(int argc, const char **argv) {
   ProcessIncDec cb10(&Tool.getReplacements());
   ProcessMagicNumbers cb11(&Tool.getReplacements());
   ProcessEqBool cb12(&Tool.getReplacements());
+  ProcessNull cb13(&Tool.getReplacements());
 
   Finder.addMatcher(
       // Look for invocations (*p).method(...)
@@ -686,6 +725,29 @@ int main(int argc, const char **argv) {
                hasRHS(implicitCastExpr(has(boolLiteral().bind("bool")))) )
         ).bind("expr"),
       &cb12);
+
+  Finder.addMatcher(
+      binaryOperator(
+         unless(isExpansionInSystemHeader()),
+         anyOf(hasOperatorName("=="),
+               hasOperatorName("!=") ),
+         anyOf(hasLHS(ignoringImpCasts(boolLiteral().bind("bool"))),
+               hasRHS(ignoringImpCasts(boolLiteral().bind("bool"))) )
+        ).bind("expr"),
+      &cb12);
+
+  Finder.addMatcher(
+      declRefExpr(
+        unless(isExpansionInSystemHeader()),
+        to(varDecl(hasName("NULL")))
+       ).bind("expr"),
+      &cb13);
+
+  Finder.addMatcher(
+      gnuNullExpr(
+        unless(isExpansionInSystemHeader())
+       ).bind("expr"),
+      &cb13);
 
   // Run everything. If we suggested doing any replacements,
   // save the changes to disk
