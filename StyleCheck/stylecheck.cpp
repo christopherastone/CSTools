@@ -21,37 +21,60 @@
 
 #include "issue.hpp"
 
+using namespace clang;
+using namespace clang::ast_matchers;
+using namespace clang::driver;
+using namespace clang::tooling;
+using namespace llvm;
+//using namespace std;
 
+////////////////////////////
+// AST Matchers
+////////////////////////////
+
+// As mentioned in the "AST Matcher Reference"
+//   http://clang.llvm.org/docs/LibASTMatchersReference.html
+// there aren't predefined matchers for all sorts of AST nodes,
+// or for all properties of AST nodes.
+//
+// Fortunately, it turns out that it's not too hard to
+// add our own.
 
 #include "clang/ASTMatchers/ASTMatchersInternal.h"
 #include "clang/ASTMatchers/ASTMatchersMacros.h"
 
 namespace clang {
   namespace ast_matchers {
+
+    // Node matcher: a parenthesized expression
     const internal::VariadicDynCastAllOfMatcher<Stmt, ParenExpr> parenExpr;
+
+    // Node matcher: an UnresolvedLookupExpr (unresolved variable)
     const internal::VariadicDynCastAllOfMatcher<Stmt, UnresolvedLookupExpr> unresolvedLookupExpr;
 
+    // Narrowing matcher: is the function one created by "= default" ?
     AST_MATCHER(FunctionDecl, isDefaulted) { return Node.isDefaulted(); }
+
+    // Narrowing matcher: does the name of the UnresolvedLookupExpr
+    //  start with "__", suggesting that it's a system helper function
+    //  like __assert_ret ?
     AST_MATCHER(UnresolvedLookupExpr, isSystemURE) {
       std::string callee = Node.getName().getAsString();
-      //std::cerr << "CALLEE: " << callee << std::endl;
       // Check for a __ prefix
       std::string uu = "__";
       if (callee.size() < 2) return false;
       return std::mismatch(uu.begin(), uu.end(), callee.begin()).first == uu.end();
     }
+
   }
 }
 
-using namespace clang;
-using namespace clang::ast_matchers;
-using namespace clang::driver;
-using namespace clang::tooling;
-using namespace llvm;
-using namespace std;
+///////////////////////////
+// Command-line Options
+///////////////////////////
+
 static cl::OptionCategory StyleCheckCategory("Style Check Options");
 
-static cl::opt<bool> Force ("f", cl::desc("Overwrite output files"));
 static cl::opt<bool> HTMLoutput("html",
                                 cl::cat(StyleCheckCategory),
                                 cl::desc("Generate HTML output"));
@@ -62,9 +85,14 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 //static cl::extrahelp MoreHelp("\nMore help text...");
 
 
+///////////////
+// Globals
+///////////////
+
+// The collection of problems found.
 std::set<Issue> lineIssues;
 
-
+// Various regular expressions for variable names
 std::regex is_camelCase = std::regex("(.*::)?[a-z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
 std::regex is_CamelCase = std::regex("(.*::)?[A-Z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
 std::regex final_underscore = std::regex(".*_");
@@ -74,64 +102,92 @@ std::regex is_UPPER_CASE = std::regex("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*");
 // Clang introduces variables like __range to implement foreach loops
 std::regex is_internal = std::regex("__[A-Za-z0-9]*");
 
+// Does the filename end with .h or .hpp?
 std::regex is_headerFile = std::regex(".*\\.h(pp)?");
+
 
 
 /////////////////////////////
 // Cyclomatic Complexity
 /////////////////////////////
 
+// A complexity of 10 or less is often recommended,
+//     unless there's a good reason.
+// But how high does the complexity need to be before we
+//   want to start complaining here?
+constexpr size_t COMPLEXITY_LIMIT = 12;
+
+// For structured code, cyclomatic complexity is
+//   defined to be one more than the number of
+//   "decision points" in the code.
+// Here we only count an n-way switch as 1 decision point.
+
+// Write a recursive AST visitor that increments a counter
+//   at each decision point.
 class Cyclomatic : public RecursiveASTVisitor<Cyclomatic> {
 public:
-  bool VisitForStmt(ForStmt*) {
-    ++count_;
-    return true;
-  }
-  bool VisitIfStmt(IfStmt*) {
-    ++count_;
-    return true;
-  }
-  bool VisitWhileStmt(WhileStmt*) {
-    ++count_;
-    return true;
-  }
-  bool VisitSwitchStmt(SwitchStmt*) {
-    ++count_;
-    return true;
-  }
-  bool VisitCXXCatchStmt(CXXCatchStmt*) {
-    ++count_;
-    return true;
-  }
+  bool VisitForStmt(ForStmt*)           { return inc(); }
+  bool VisitIfStmt(IfStmt*)             { return inc(); }
+  bool VisitWhileStmt(WhileStmt*)       { return inc(); }
+  bool VisitSwitchStmt(SwitchStmt*)     { return inc(); }
+  bool VisitCXXCatchStmt(CXXCatchStmt*) { return inc(); }
+
   bool VisitBinaryOperator(BinaryOperator* b) {
+    // Like inc(), but only count && and ||.
     auto op = b->getOpcode();
     if (op == BO_LAnd || op == BO_LOr) ++count_;
     return true;
   }
 
   size_t getComplexity() { return count_; }
+
 private:
-  size_t count_ = 1;
+  size_t count_ = 1;  // Cyclomatic complexity
+
+  bool inc() {
+    ++ count_;    // Update the count
+    return true;  // Continue recursing through the tree.
+  }
 };
 
-///////////////////////////////
-// Callbacks for Nodes Found
-///////////////////////////////
+// Run the traversal on the given statement (function body)
+//  (by creating a visitor object and starting it running)
+//  and report the results.
+size_t bodyComplexity(Stmt* body)
+{
+  Cyclomatic cyc;
+  cyc.TraverseStmt(body);
+  return cyc.getComplexity();
+}
 
+////////////////////////
+// Reporting issues
+///////////////////////
 
-void addIssue(const SourceManager& SM, const SourceRange& range,
-              std::set<Issue>& v, std::string message, Severity sev = Severity::WARNING)
+// Because of macros and templates, clang's "range"
+// information about AST nodes is often flaky, e.g.,
+// if you use a macro, the range for the *use*
+// might span all the way from the definition of the
+// macro to the end of the use.
+//
+// So, we do something more complex in going from
+// the range object to the start/end pair.
+//
+std::pair<SourceLocation,SourceLocation>
+   getBounds(const SourceManager& SM, const SourceRange& range)
 {
   SourceLocation start = range.getBegin();
   SourceLocation stop  = range.getEnd();
 
-  // Adapted from http://lists.cs.uiuc.edu/pipermail/cfe-commits/Week-of-Mon-20121022/066863.html
+  // Adapted from
+  // http://lists.cs.uiuc.edu/pipermail/cfe-commits/Week-of-Mon-20121022/066863.html
+
   while (start.isMacroID())
       start = SM.getImmediateMacroCallerLoc(start);
 
   FileID LocFileID = SM.getFileID(start);
 
-   while (stop.isMacroID() && SM.getFileID(stop) != LocFileID) {
+  while (stop.isMacroID() && SM.getFileID(stop) != LocFileID) {
       // The computation of the next End is an inlined version of
       // getImmediateMacroCallerLoc, except it chooses the end of an
       // expansion range.
@@ -142,21 +198,63 @@ void addIssue(const SourceManager& SM, const SourceRange& range,
       }
     }
 
-    start = SM.getSpellingLoc(start);
-    stop = SM.getSpellingLoc(stop);
+  start = SM.getSpellingLoc(start);
+  stop = SM.getSpellingLoc(stop);
 
-  size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOptions());
+  return std::make_pair(start,stop);
+}
+
+// If a declaration is longer than this, we will
+// not extract its code..
+constexpr int MAX_CODE_LENGTH = 4096;
+
+// Get the osurce code for the bounds.
+// As a hack, allow an extra character offset
+// for the end position.
+std::string getCode(const SourceManager& SM,
+                    SourceLocation start,
+                    SourceLocation stop,
+                    int offset = 0)
+{
   std::string code = "...code not available...";
 
-  //if (SM.isMacroArgExpansion(start)) start = SM.getFileLoc(start);
-  //if (SM.isMacroArgExpansion(stop )) stop  = SM.getFileLoc(stop);
+  // LLVM ranges tend to go from the start of the
+  // first token in the text to the *start* of the
+  // last token. So we calculate the length of the
+  // last token.
+  offset += Lexer::MeasureTokenLength(stop, SM, LangOptions());
 
+  // If we did things right, the start and end are in the same file.
   if (SM.isWrittenInSameFile(start, stop)) {
     ptrdiff_t len = SM.getCharacterData(stop)-SM.getCharacterData(start)+offset;
-    if (len >= 0 && len < 1000) {
+    if (len >= 0 && len < MAX_CODE_LENGTH) {
+      // If len is negative, we didn't manage to get the right
+      //   start/end pair.
+      // If len is too big, either somethign went wrong
       code = std::string(SM.getCharacterData(start), len);
     }
   }
+
+  return code;
+}
+
+constexpr auto DEFAULT_SEVERITY = Severity::WARNING;
+
+// Add a problem to our collection of problems.
+//
+// The offset hack just gets passed to getCode.
+void addIssue(const SourceManager& SM,
+              const SourceRange& range,
+              std::set<Issue>& v,
+              std::string message,
+              Severity sev = DEFAULT_SEVERITY,
+              int offset = 0)
+{
+  auto bounds = getBounds(SM, range);
+  SourceLocation start = bounds.first;
+  SourceLocation stop  = bounds.second;
+
+  std::string code = getCode(SM, start, stop, offset);
 
   v.emplace( SM.getFilename(start),
              SM.getPresumedLineNumber(start),
@@ -166,6 +264,9 @@ void addIssue(const SourceManager& SM, const SourceRange& range,
 }
 
 
+///////////////////////////////
+// Callbacks for Nodes Found
+///////////////////////////////
 
 
 // Each class defines a run() method handling matches
@@ -177,18 +278,22 @@ void addIssue(const SourceManager& SM, const SourceRange& range,
 class ProcessDecl : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched class-declaration AST node
-    const Decl *decl = Result.Nodes.getNodeAs<Decl>("decl");
 
-    //decl->dump();
+    // Get the matched declaration
+    const Decl *decl = Result.Nodes.getNodeAs<Decl>("decl");
+    assert (decl != nullptr);
 
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = decl->getSourceRange();
 
     switch (decl->getKind()) {
+
       case Decl::UsingDirective:
         {
+          // "using namespace" Directive
+
+          // Check that we're not in a header file.
           std::string filename = SM.getFilename(range.getBegin());
           if (std::regex_match(filename, is_headerFile)) {
             addIssue( SM, range, lineIssues,
@@ -200,60 +305,97 @@ public:
       case Decl::Function:
       case Decl::CXXMethod:
         {
+          // Function or Method
           const FunctionDecl* f = dyn_cast<FunctionDecl>(decl);
+
+          // Complain about the definition, not the declaration.
+          //  (Not all functions have separate declarations, and
+          //  there's no obvious need to complain twice.)
           if (! f->doesThisDeclarationHaveABody()) break;
 
+          // Get the name and body of the function.
           std::string name = f->getNameAsString();
           Stmt* body = f->getBody();
 
+          // We don't want to print the whole function
+          // just because the name is funny. Move the
+          // end of the displayed range to the start of the
+          // function body.
           range.setEnd(body->getLocStart());
 
+          // Check the name
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool matches_operator = std::regex_match(name, is_operator);
           bool has_underscore = std::regex_match(name, final_underscore);
 
+          // Note: unfortunately, the computed start/end
+          //   pair for the function header is including the
+          //   newline and opening curly brace.
+          // So we hack the code extraction and
+          //   back up by 2 characters
+
           if ( (! matches_camelCase || has_underscore) &&
                ! matches_operator) {
             addIssue( SM, range, lineIssues,
-                      "Found non-camelCase function name: " + name);
+                      "Found non-camelCase function name: " + name,
+                      DEFAULT_SEVERITY, -2);
           }
 
-          Cyclomatic cyc;
-          cyc.TraverseStmt(body);
-          auto complexity = cyc.getComplexity();
-          if ( complexity > 10) {
+          // In addition to checking the name,
+          // compute the cyclomatic complexity of the code.
+          auto complexity = bodyComplexity(body);
+          if ( complexity >= COMPLEXITY_LIMIT) {
              addIssue (SM, range, lineIssues,
-                        "Function " + name + " has complexity " + to_string(complexity) +
-                        "; aim for below 10 (15 in extremity).");
+                        "Function " + name + " has cyclomatic complexity " +
+                        std::to_string(complexity) +
+                        "; aim for 10 or less per function.",
+                        DEFAULT_SEVERITY, -2);
           }
           break;
         }
 
       case Decl::Var:
         {
+          // Declaring local variables, global variables, and
+          //   static data members.
           const VarDecl* f = dyn_cast<VarDecl>(decl);
+
+          // Get the variable name
           std::string name = f->getDeclName().getAsString();
+
+          // Check the variable name
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool has_underscore = std::regex_match(name, final_underscore);
           bool matches_UPPER_CASE = std::regex_match(name, is_UPPER_CASE);
           bool matches_internal = std::regex_match(name, is_internal);
+
+          // Check whether the variable is constant, or could be
           auto varType = f->getType();
           bool is_const = varType.isConstQualified();
           const Expr* init = f->getAnyInitializer();
+
           bool has_constexpr_definition =
-            (f->isConstexpr()) ||
+            isLiteral(init) ||
             // The following code crashes with assertion errors as of July 2, 2015
-            //((init != nullptr) && (init->isCXX11ConstantExpr(*(Result.Context))));
+            //((init != nullptr) && (init->isCXX11ConstantExpr(*(Result.Context))))
+            // So does this:
+            //((init != nullptr) &&
+            //    (init->isConstantInitializer(*(Result.Context),false))) ||
+            // And this:
+            //  ((init != nullptr) && (init->isIntegerConstantExpr(*(Result.Context)))) ||
             false;
 
+          // Diagnose
           if (!is_const &&
               ! (matches_camelCase || has_underscore) &&
               ! (matches_camelCase && has_underscore && f->isStaticDataMember()) &&
               ! matches_internal) {
             addIssue( SM, range, lineIssues,
                       "Found a non-camelCase variable name: " +
-                        f->getQualifiedNameAsString() +
-                        ((matches_UPPER_CASE && has_constexpr_definition) ?
+                        f->getNameAsString() +
+
+                        ((matches_UPPER_CASE && !(f->isConstexpr()) &&
+                          has_constexpr_definition) ?
                            " (is this supposed to be constant?)" : "") );
           } else if (is_const &&
                       ! matches_UPPER_CASE &&
@@ -261,46 +403,59 @@ public:
                       ! matches_internal) {
             addIssue( SM, range, lineIssues,
                       "Found a non-UPPER_CASE constant name: " +
-                        f->getQualifiedNameAsString() );
+                        f->getNameAsString() );
           }
           break;
         }
 
       case Decl::Field:
         {
+          // Get the field declaration
           const FieldDecl* f = dyn_cast<FieldDecl>(decl);
+          assert (f != nullptr);
+
+          // Check the name of the field.
           std::string name = f->getNameAsString();
           bool matches_camelCase = std::regex_match(name, is_camelCase);
           bool has_underscore = std::regex_match(name, final_underscore);
-
           bool matches_UPPER_CASE = std::regex_match(name, is_UPPER_CASE);
+
+          // Check the type and initializer of the field
           auto varType = f->getType();
           bool is_const = varType.isConstQualified();
+          const Expr* init = f->getInClassInitializer();
+          bool has_constexpr_definition =
+            isLiteral(init) || false;
 
+          // Diagnose
           if (!matches_camelCase || !has_underscore) {
             addIssue( SM, range, lineIssues,
                       "Found a non-camelCase_ data member: " +
-                        f->getQualifiedNameAsString() +
-                        (is_const && matches_UPPER_CASE ?
+                        f->getNameAsString() +
+                        (is_const && has_constexpr_definition && matches_UPPER_CASE ?
                            " (should this be a 'static constexpr' data member?)" : "" ));
           }
           break;
         }
 
       case Decl::Record:
-        // struct/union/class
         {
 
+          // Get the struct/union/class declaration
           const CXXRecordDecl* f = dyn_cast<CXXRecordDecl>(decl);
+          assert (f != nullptr);
+
+          // To avoid duplicate name warnings, ignore forward declarations
           if (! f->isCompleteDefinition()) break;
 
+          // Check the name.
           std::string name = f->getNameAsString();
           bool matches_CamelCase = std::regex_match(name, is_CamelCase);
           bool has_underscore = std::regex_match(name, final_underscore);
 
+          // Diagnose
           if (!matches_CamelCase || !has_underscore) {
-            std::string kind = f->isClass() ? "class" :
-                                 (f->isStruct() ? "struct" : "union");
+            std::string kind = f->isClass() ? "class" : (f->isStruct() ? "struct" : "union");
             addIssue( SM, range, lineIssues,
                       "Found a non-CamelCase " + kind + " name: " +
                         f->getQualifiedNameAsString() );
@@ -311,102 +466,41 @@ public:
     default:
         break;
 
-/*
-      case Decl::Block:
-        break;
-
-
-      case Decl::CXXConstructor:
-        break;
-
-      case Decl::CXXDestructor:
-        break;
-
-      case Decl::CXXConversion:
-        break;
-
-      case Decl::Block:
-        break;
-
-      case Decl::TemplateTypeParm:
-        break;
-
-      case Decl::VarTemplate:
-        break;
-
-      case Decl::FunctionTemplate:
-        break;
-
-      case Decl::TypeAliasTemplate:
-        break;
-
-      case Decl::TemplateTemplateParm:
-        break;
-
-      case Decl::Friend:
-      case Decl::FriendTemplate:
-        break;
-
-      case Decl::Captured:
-        break;
-
-
-      case Decl::Enum:
-      case Decl::EnumConstant:
-        break;
-
-      case Decl::Label:
-        break;
-
-      case Decl::NamespaceAlias:
-        break;
-
-      case Decl::Using:
-        // using X;
-        break;
-
-
-      case Decl::Typedef:
-      case Decl::TypeAlias:
-        break;
-
-      default:
-        break;
-        */
     }
   }
-};
 
+private:
+  static bool isLiteral(const Expr* e)
+  {
+    if (!e) return false;
 
-class ProcessMemberCall : public MatchFinder::MatchCallback {
-public:
-  virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched class-declaration AST node
-    const CXXMemberCallExpr *expr = Result.Nodes.getNodeAs<CXXMemberCallExpr>("callWithPointer");
+    // Skip any implicit or explicit casts
+    if (const CastExpr* e2 = dyn_cast<CastExpr>(e)) {
+      e = e2->getSubExprAsWritten();
+    }
 
-    // Get the source location of that declaration
-    SourceManager& SM = *Result.SourceManager;
-    SourceRange range = expr->getSourceRange();
-
-    addIssue( SM, range, lineIssues,
-        "Found a call using (*foo).bar(...) notation instead of foo->bar(...) notation");
+    return isa<IntegerLiteral>(e) ||
+           isa<FloatingLiteral>(e) ||
+           isa<CharacterLiteral>(e) ||
+           isa<StringLiteral>(e);
   }
+
 };
+
 
 class ProcessMemberProj : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched class-declaration AST node
-    const MemberExpr *expr = Result.Nodes.getNodeAs<MemberExpr>("projWithPointer");
 
-    //expr->dump();
+    // Get the matched projection
+    const Expr *expr = Result.Nodes.getNodeAs<Expr>("expr");
+    assert(expr != nullptr);
 
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = expr->getSourceRange();
 
-    addIssue( SM, range, lineIssues,
-        "Using '->' would be better!");
+    addIssue( SM, range, lineIssues, "Using '->' would be better!");
   }
 };
 
@@ -414,63 +508,42 @@ public:
 class ProcessGotoStmt : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched class-declaration AST node
-    const GotoStmt *decl = Result.Nodes.getNodeAs<GotoStmt>("goto");
+
+    // Get the matched goto statement
+    const GotoStmt *gotoStmt = Result.Nodes.getNodeAs<GotoStmt>("stmt");
+    assert(gotoStmt != nullptr);
 
     // Get the source location of that declaration
     SourceManager& SM = *Result.SourceManager;
-    SourceRange range = decl->getSourceRange();
+    SourceRange range = gotoStmt->getSourceRange();
 
-    addIssue( SM, range, lineIssues, "Go To statement considered harmful.");
+    addIssue( SM, range, lineIssues, "Goto considered harmful.");
   }
 };
 
-/*
-class ProcessThisCall : public MatchFinder::MatchCallback {
-public:
-  virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched `this' AST node, NOT the whole this->foo expression!
-    const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
-    const CXXMemberCallExpr* callExpr = Result.Nodes.getNodeAs<CXXMemberCallExpr>("myCall");
-
-
-    if (thisExpr->isImplicit()) {
-        // Don't yell at the user for implicit `this'!
-        return;
-    }
-
-
-    callExpr->dump();
-
-    // Get the source location of that statement
-    SourceManager& SM = *Result.SourceManager;
-    SourceRange range = callExpr->getSourceRange();
-
-    addIssue( SM, range, lineIssues, "Explicit use of this->foo() instead of foo()");
-  }
-};
-*/
 
 class ProcessThisProj : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched `this' AST node, NOT the whole this->foo expression!
-    const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("myThis");
+
+    // Get the matched projection
     const MemberExpr* projExpr = Result.Nodes.getNodeAs<MemberExpr>("projection");
+    assert (projExpr != nullptr);
+    // Get the matched `this'
+    const CXXThisExpr* thisExpr = Result.Nodes.getNodeAs<CXXThisExpr>("this");
+    assert (thisExpr != nullptr);
 
     if (thisExpr->isImplicit()) {
         // Don't yell at the user for implicit `this'!
         return;
     }
-
-    //projExpr->dump();
 
     // Get the source location of that statement
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = projExpr->getSourceRange();
 
+    // Diagnose
     std::string fieldName = projExpr->getMemberNameInfo().getAsString();
-
     addIssue( SM, range, lineIssues,
         "Expression could be simplified to just '" + fieldName + "'");
   }
@@ -479,18 +552,22 @@ public:
 class ProcessIncDec : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched `this' AST node, NOT the whole this->foo expression!
+
+    // Get the matched increment (or decrement) expression
     const UnaryOperator* incExpr = Result.Nodes.getNodeAs<UnaryOperator>("increment");
+    assert (incExpr != nullptr);
 
+    // Our pattern also catches prefix ++ and --; if so, nothing
+    //   to complain about.
     if (incExpr->isPrefix()) return;
-
-    std::string operation =
-      (incExpr->isIncrementOp() ? "increment" : "decrement");
 
     // Get the source location of that statement
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = incExpr->getSourceRange();
 
+
+    // Diagnose.
+    std::string operation = (incExpr->isIncrementOp() ? "increment" : "decrement");
     addIssue( SM, range, lineIssues,
         "Pre-" + operation + " is preferred to post-" + operation + " in idiomatic C++");
   }
@@ -500,24 +577,33 @@ public:
 class ProcessMagicNumbers : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    // Get the matched `this' AST node, NOT the whole this->foo expression!
-    const Expr* expr = Result.Nodes.getNodeAs<Expr>("literal");
 
-    //expr->dump();
+    // Get the matched literal constant
+    const Expr* litExpr = Result.Nodes.getNodeAs<Expr>("literal");
+    assert (litExpr != nullptr);
 
-    if (const IntegerLiteral* litExpr = Result.Nodes.getNodeAs<IntegerLiteral>("literal")) {
-      auto value = litExpr->getValue();
-      if (value == -1 || value == 0 || value == 1 || value == 2) return;
-    } else if (const FloatingLiteral* fltExpr = Result.Nodes.getNodeAs<FloatingLiteral>("literal")) {
+    // See (by run-time type test) whether the expression is an integer
+    //    or floating-point constant
+    if (const IntegerLiteral* intExpr = Result.Nodes.getNodeAs<IntegerLiteral>("literal")) {
+
+      auto value = intExpr->getValue();
+      if (value == -1 || value == 0 || value == 1 || value == 2)
+        // Usually not worth naming such a constant
+        return;
+
+    } else if (const FloatingLiteral* fltExpr =
+                                 Result.Nodes.getNodeAs<FloatingLiteral>("literal")) {
+
       auto value = fltExpr->getValueAsApproximateDouble();
-      if (value == 0.0 || value == 1.0 || value == -1.0) return;
-    } else {
-      cerr << "CAN'T UNDERSTAND LITERAL!" << endl;
+      if (value == 0.0 || value == 1.0 || value == -1.0 || value == 2.0)
+        // Usually not worth naming such a constant
+        return;
+
     }
 
-    // Get the source location of that statement
+    // Get the source location of the literal
     SourceManager& SM = *Result.SourceManager;
-    SourceRange range = expr->getSourceRange();
+    SourceRange range = litExpr->getSourceRange();
 
     addIssue( SM, range, lineIssues, "Is this a magic number?");
   }
@@ -525,28 +611,38 @@ public:
 
 class ProcessEqBool : public MatchFinder::MatchCallback {
 public:
+
   virtual void run(const MatchFinder::MatchResult &Result) {
-    const BinaryOperator* expr = Result.Nodes.getNodeAs<BinaryOperator>("expr");
+    // Get the matched comparision operation (either == or !=)
+    const BinaryOperator* boolExpr = Result.Nodes.getNodeAs<BinaryOperator>("expr");
+    assert (boolExpr != nullptr);
+    // Get the matched boolean literal
     const CXXBoolLiteralExpr* boolLit = Result.Nodes.getNodeAs<CXXBoolLiteralExpr>("bool");
+    assert (boolLit != nullptr);
 
     bool trueConst = boolLit->getValue();
-    bool equality = expr->getOpcode() == BO_EQ;
+    bool equality = boolExpr->getOpcode() == BO_EQ;
 
     // Get the source location of that statement
     SourceManager& SM = *Result.SourceManager;
-    SourceRange range = expr->getSourceRange();
+    SourceRange range = boolExpr->getSourceRange();
 
+    // Diagnose
     if (trueConst) {
       if (equality) {
-        addIssue( SM, range, lineIssues, "Redundant (or buggy!) \"== true\"");
+        addIssue( SM, range, lineIssues,
+                  "Redundant (or buggy!) \"== true\"");
       } else {
-        addIssue( SM, range, lineIssues, "The prefix ! (not) operator would be more idiomatic");
+        addIssue( SM, range, lineIssues,
+                  "The prefix ! (not) operator would be more idiomatic");
       }
     } else {
       if (equality) {
-        addIssue( SM, range, lineIssues, "The prefix ! (not) operator would be more idiomatic");
+        addIssue( SM, range, lineIssues,
+                  "The prefix ! (not) operator would be more idiomatic");
       } else {
-        addIssue( SM, range, lineIssues, "Redundant \"!= false\"");
+        addIssue( SM, range, lineIssues,
+                  "Redundant \"!= false\"");
       }
     }
   }
@@ -555,7 +651,10 @@ public:
 class ProcessNull : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
+
+    // Get the matched NULL or 0 expression
     const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
+    assert (expr != nullptr);
 
     // Get the source location of that statement
     SourceManager& SM = *Result.SourceManager;
@@ -568,15 +667,19 @@ public:
 class ProcessCCast : public MatchFinder::MatchCallback {
 public:
   virtual void run(const MatchFinder::MatchResult &Result) {
-    const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
 
-    // Get the source location of that statement
+    // Get the matched cast expression
+    const Expr* expr = Result.Nodes.getNodeAs<Expr>("expr");
+    assert (expr != nullptr);
+
+    // Get the source location
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = expr->getSourceRange();
 
     addIssue( SM, range, lineIssues, "Modern C++ avoids C-style casts");
   }
 };
+
 ////////////////////////
 //  main
 ///////////////////////
@@ -589,204 +692,343 @@ int main(int argc, const char **argv) {
                           OptionsParser.getSourcePathList());
   MatchFinder Finder;
 
-  // Create callback object(s) for each rule.
-  ProcessMemberCall cb5;
-  ProcessMemberProj cb9;
-  ProcessGotoStmt cb6;
-//  ProcessThisCall  cb7;
-  ProcessThisProj  cb8;
-  ProcessDecl  cbDecl;
-  ProcessIncDec cb10;
-  ProcessMagicNumbers cb11;
-  ProcessEqBool cb12;
-  ProcessNull cb13;
-  ProcessCCast cb14;
+
+  //
+  // ------START OF main() PATTERNS---------
+  //
+
+
+  //
+  // Search for field accesses
+  //    (*p).field_
+  // and invocations
+  //    (*p).method(...)
+  // where p is a pointer.
+  //
+
+  ProcessMemberProj processMemberProj;
 
   Finder.addMatcher(
-      // Look for invocations (*p).method(...)
-      //  But only where p is a pointer. Otherwise, it _might_ be reasonable.
-      //  (e.g., if p belongs to a class that did not implement ->.)
-      memberCallExpr(unless(isExpansionInSystemHeader()),
-                     on(unaryOperator(hasOperatorName("*"),
-                                      hasUnaryOperand(expr(hasType(pointerType())))))
-          ).bind("callWithPointer"),
-      &cb5);
-
-  Finder.addMatcher(
-      // Look for invocations (*p).field_
-      //  But only where p is a pointer. Otherwise, it _might_ be reasonable.
-      //  (e.g., if p belongs to a class that did not implement ->.)
+      // Look for data member accesses
       memberExpr(
-          unless(isExpansionInSystemHeader()),
-          hasObjectExpression(
-             parenExpr(
-               has(
-                 unaryOperator(
-                   hasOperatorName("*"),
-                   hasUnaryOperand(
-                     expr(unless(thisExpr()),
-                          hasType(pointerType())
-                     )
+        // that are not in a system header file
+        unless(isExpansionInSystemHeader()),
+        // ...and whose projectee
+        hasObjectExpression(
+           // ...has parentheses
+           parenExpr(
+             has(
+               // ...containing a use of a unary operator
+               unaryOperator(
+                 // ... specifically the * operator
+                 hasOperatorName("*"),
+                 // ... applied to an operand
+                 hasUnaryOperand(
+                   // ... expression
+                   expr(
+                     // ... having a pointer type
+                     hasType(pointerType()),
+                     // ... but not the this keyword
+                     //  (because we handle it separately)
+                     unless(thisExpr())
                    )
                  )
                )
              )
            )
-         ).bind("projWithPointer"),
-      &cb9);
+         )
+       ).bind("expr"),
+      &processMemberProj);
 
   Finder.addMatcher(
-      gotoStmt(unless(isExpansionInSystemHeader())).bind("goto"),
-      &cb6);
-/*
-  // Seems to be handled by the MemberExpr catcher.
-  Finder.addMatcher(
+      // Look for member function invocations
       memberCallExpr(
-          unless(isExpansionInSystemHeader()),
-          on(anyOf(thisExpr().bind("myThis"),
-                   unaryOperator(hasOperatorName("*"),
-                                 hasUnaryOperand(thisExpr().bind("myThis")))))
-          ).bind("myCall"),
-      &cb7);
-*/
+        // ...that are not in a system header file
+        unless(isExpansionInSystemHeader()),
+        // ...and whose callee
+        on(
+          // ...is a unary operator
+          unaryOperator(
+            // ...specifically a * operator
+            hasOperatorName("*"),
+            // ...whose operand is a pointer.
+            hasUnaryOperand(expr(hasType(pointerType())))))
+       ).bind("expr"),
+      &processMemberProj);
+  //
+  // Search for uses of "goto"
+  //
+
+  ProcessGotoStmt processGotoStmt;
 
   Finder.addMatcher(
+      // Look for goto statements
+      gotoStmt(
+        // ...that are not in a system header file
+        unless(isExpansionInSystemHeader())
+       ).bind("stmt"),
+      &processGotoStmt);
+
+
+  //
+  // Search for uses of (*this).foo or this->foo
+  //
+  // It seems like these same patterns also catch (*this).bar(...)
+  // and this->bar(...)
+  //
+
+  ProcessThisProj processThisProj;
+
+  Finder.addMatcher(
+      // look for projections from objects
       memberExpr(
+          // ...not in a system header file
           unless(isExpansionInSystemHeader()),
+          // ...where that object
           hasObjectExpression(
-             parenExpr(
-               has(
-                 unaryOperator(
-                   hasOperatorName("*"),
-                   hasUnaryOperand(
-                     thisExpr().bind("myThis")
-                   )
+            // ... is a parenthesized
+            parenExpr(
+              has(
+                // ... use of a unary operator,
+                unaryOperator(
+                  // ... specifically, the * operator
+                  hasOperatorName("*"),
+                  // ...applied to
+                  hasUnaryOperand(
+                    // ... the "this" object
+                    thisExpr().bind("this")
+                  )
                  )
                )
              )
            ),
-          // Some implicitly-generated code seems to use "this->"
+          // ...and where the projection does not occur in a declaration
+          // that was automatically synthesized by the compiler implicitly
           unless(hasAncestor(isImplicit())),
+          // ... or synthesized because of an explicit "== default"
           unless(hasAncestor(functionDecl(isDefaulted())))
+          // ...since synthesized code seems to use explicit this's.
          ).bind("projection"),
-      &cb8);
-
+      &processThisProj);
 
   Finder.addMatcher(
+      // and look for projections from
       memberExpr(
-          hasObjectExpression(thisExpr().bind("myThis")),
+          // ... the "this" object
+          hasObjectExpression(thisExpr().bind("this")),
+          // ... not in a system header file
           unless(isExpansionInSystemHeader()),
-          // Some implicitly-generated code seems to use this->
+          // ...and where the projection does not occur in a declaration
+          // that was automatically synthesized by the compiler implicitly
           unless(hasAncestor(isImplicit())),
-          // Code generated by =default  seems to use this->
+          // ... or synthesized because of an explicit "== default"
           unless(hasAncestor(functionDecl(isDefaulted())))
-          ).bind("projection"),
-      &cb8);
+          // ...since synthesized code seems to use explicit this's.
+         ).bind("projection"),
+      &processThisProj);
+
+
+  //
+  // Generic analysis of all declarations
+  //
+
+  ProcessDecl processDecl;
 
   Finder.addMatcher(
-      // ignore declarations in expanded templates, for now.
-      // Otherwise, we get errors about names in templates both it they are defined
-      //    *and* when they are (usually implicitly) instantiated
-      decl(unless(anyOf(isExpansionInSystemHeader(),
-                        isInstantiated(),
-                        hasParent(catchStmt())))).bind("decl"),
-      &cbDecl);
-
-  Finder.addMatcher(
-       unaryOperator(
+    // Look for declarations
+      decl(
+          // ...not in a system header file
           unless(isExpansionInSystemHeader()),
-          anyOf(hasOperatorName("++"),hasOperatorName("--")),
-          unless(hasParent(expr()))
-         ).bind("increment"),
-      &cb10);
+          // ...not the result of instantiating a template
+          //    (because we've probably analyzed the template
+          //    code itself, and we don't want duplicates)
+          unless( isInstantiated()),
+          // ...and not immediately inside a catch statement
+          //    (where LLVM seems to generate variable names taht
+          //    loook like class names)
+          unless(hasParent(catchStmt()))
+         ).bind("decl"),
+      &processDecl);
+
+
+  //
+  // Look for unnecessary prefix ++ and -- operations
+  //
+  // We catch both prefix and postfix operations in this
+  // pattern, and then rely on the callback to distinguish them.
+  //
+
+  ProcessIncDec processIncDec;
 
   Finder.addMatcher(
+      // Look unary-operator expressions,
+      unaryOperator(
+        // ...not in a system header file
+        unless(isExpansionInSystemHeader()),
+        // ...that is either ++ or --
+        anyOf(hasOperatorName("++"),hasOperatorName("--")),
+        // ...and
+        anyOf(
+          // ...either this whole thing is not immediately nested
+          //    inside another expression (e.g., it's a statement
+          //    by itself).
+          unless(hasParent(expr())),
+          // ...or the parent expression is a comma operator
+          hasParent( binaryOperator( hasOperatorName(",") ))
+        )
+       ).bind("increment"),
+      &processIncDec);
+
+  //
+  // Look for magic numbers
+  //
+
+  ProcessMagicNumbers processMagicNumbers;
+
+  Finder.addMatcher(
+      // Look for integer literals
       integerLiteral(
-         unless(equals(0)),  // Optimization?
-         unless(equals(1)),  // Optimization?
+         // ...other than zero and one (is this really an optimization?)
+         unless(equals(0)),
+         unless(equals(1)),
+         // ...not in system header files
          unless(isExpansionInSystemHeader()),
+         // ...that are not immediately part of a declaration
+         //     (presumably a definition)
          unless(hasParent(decl())),
+         // ...(or of a type cast and a declaration/definition)
          unless(hasParent(implicitCastExpr(hasParent(decl())))),
-         // Things like assert() create constant line numbers.
+         // ...and which are not part of compiler-created call to a
+         //    function like __assert_rtn (used by the assert macro)
+         //    because it plugs in line numbers as magic constants
          unless(hasAncestor(callExpr(callee(namedDecl(matchesName("__")))))),
-         // Sometimes assert beomces an unresolvedLookupExpr
+         // ...(but sometime the call to __assert_rtn shows up in the AST
+         //    as an unresolvedLookupExpr, so check for that.)
          unless(hasAncestor(callExpr(callee(unresolvedLookupExpr(isSystemURE()))))),
-         // e.g., the constants in primeLessthan
+         // ...and where the literal is not part of an explicit array
+         //    initializer list (e.g., the constants in primeLessThan).
          unless(hasParent(initListExpr()))
         ).bind("literal"),
-      &cb11);
+      &processMagicNumbers);
 
   Finder.addMatcher(
+      // Look for floating-point literals
       floatLiteral(
-         unless(equals(0.0)),  // Optimization?
-         unless(equals(1.0)),  // Optimization?
+         // ...other than 0.0 and 1.0 (is this really an optimization?)
+         unless(equals(0.0)),
+         unless(equals(1.0)),
+         // ...not in a system header
          unless(isExpansionInSystemHeader()),
+         // ...that are not immediately part of a declaration
+         //     (presumably a definition)
          unless(hasParent(decl())),
+         // ...and which are not part of compiler-created call to a
+         //    function like __assert_rtn (used by the assert macro)
+         //    because it plugs in line numbers as magic constants
          unless(hasParent(implicitCastExpr(hasParent(decl())))),
+         // ...and where the literal is not part of an explicit array
+         //    initializer list (e.g., the constants in primeLessThan).
          // e.g., the constants in primeLessthan
          unless(hasParent(initListExpr()))
         ).bind("literal"),
-      &cb11);
+      &processMagicNumbers);
 
+
+  //
+  // Search for == true, != true, == false, != false
+  //            true ==, true !=, false ==, false !=
+  //
+
+  ProcessEqBool processEqBool;
 
   Finder.addMatcher(
+      // Look for binary operators
       binaryOperator(
+         // ...not in a system header
          unless(isExpansionInSystemHeader()),
+         // ...specifically the == and != operators
          anyOf(hasOperatorName("=="),
                hasOperatorName("!=") ),
+         // ...where either the left-hand-side or the
+         //    right-hand-side is a boolean literal.
          anyOf(hasLHS(ignoringImpCasts(boolLiteral().bind("bool"))),
                hasRHS(ignoringImpCasts(boolLiteral().bind("bool"))) )
         ).bind("expr"),
-      &cb12);
+      &processEqBool);
 
+
+  //
+  // Search for uses of NULL
+  //
+
+  ProcessNull processNull;
+
+  /*
+     // It seems like LLVM treats NULL specially, so this pattern
+     // seems unnecessary
   Finder.addMatcher(
       declRefExpr(
         unless(isExpansionInSystemHeader()),
         to(varDecl(hasName("NULL")))
        ).bind("expr"),
-      &cb13);
+      &processNull);
+  */
 
   Finder.addMatcher(
+      // Search for uses of the system NULL pointer
       gnuNullExpr(
+        // not in a system header
         unless(isExpansionInSystemHeader())
        ).bind("expr"),
-      &cb13);
+      &processNull);
 
+  // Looking at the AST produced by clang, it seems like all
+  //  *explicit* casts of 0 have *implicit* (NullToPointer) casts inside.
+  // So it suffices to search for implicit type casts.
   Finder.addMatcher(
+      // Search for implicit type casts
       implicitCastExpr(
+        // ...of the integer 0
         has(integerLiteral(equals(0))),
+        // ...not in a system header
         unless(isExpansionInSystemHeader()),
+        // ...that are casting 0 to a pointer.
         hasImplicitDestinationType(pointerType())
        ).bind("expr"),
-      &cb13);
+      &processNull);
+
+
+  //
+  // Search for uses of C-style casts
+  //
+
+  ProcessCCast processCCast;
 
   Finder.addMatcher(
+      // Search for C-style type casts
       cStyleCastExpr(
         unless(isExpansionInSystemHeader()),
         // the assert macro seems to do the cast (void)0
         unless(has(integerLiteral(equals(0))))
        ).bind("expr"),
-      &cb14);
+      &processCCast);
 
-  // Run everything. If we suggested doing any replacements,
-  // save the changes to disk
+  //
+  // ------END OF main() PATTERNS---------
+  //
+
+  // Search for all the patterns, and run all the callbacks.
   Tool.run(newFrontendActionFactory(&Finder).get());
-
-  // lineissues is now a set, not a vector.
-  // Sort the issues by line number
-  //   std::sort(lineIssues.begin(), lineIssues.end());
-  // Remove duplicates (inefficiently!)
-  //   lineIssues.erase( unique( lineIssues.begin(), lineIssues.end() ), lineIssues.end() );
 
   //Produce either terminal or HTML output
   if (HTMLoutput) {
     for (const auto& issue: lineIssues) {
-      cout << issue.getHTML() << endl;
+      std::cout << issue.getHTML() << std::endl;
     }
   } else {
-    cout << endl;
+    std::cout << std::endl;
     for (const auto& issue: lineIssues) {
-      cout << issue.getText() << endl;
+      std::cout << issue.getText() << std::endl;
     }
   }
 
