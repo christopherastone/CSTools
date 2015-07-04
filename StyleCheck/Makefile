@@ -10,15 +10,15 @@ LDFLAGS  += $(LLVM_LDFLAGS)
 LIBS += $(CLANG_LIBS) $(LLVM_LIBS) $(BOOST_LIBS)
 
 
-all: stylecheck
+all: stylechecker stylecheck
 
-stylecheck: stylecheck.o issue.o
+stylechecker: stylechecker.o issue.o
 	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $^ $(LIBS)
 
 issue.o: issue.cpp issue.hpp
 	$(CXX) -c $(CXXFLAGS) $<
 
-stylecheck.o: stylecheck.cpp issue.hpp 
+stylechecker.o: stylechecker.cpp issue.hpp 
 	$(CXX) -c $(CXXFLAGS) $<
 
 demo: demo.cpp
@@ -28,13 +28,13 @@ demo: demo.cpp
 
 CHECK_CXXFLAGS = $(filter-out -fno-exceptions, $(CXXFLAGS))
 
-check: stylecheck
-	echo "#!/bin/sh" > check
-	echo $(shell pwd)'/stylecheck $$@ -- clang++ -c '$(CHECK_CXXFLAGS) $(CLANG_RUNTIME_INCLUDES) >> check
-	chmod +x check
+stylecheck: stylechecker
+	echo "#!/bin/sh" > stylecheck
+	echo $(shell pwd)'/stylechecker $$@ -- clang++ -c '$(CHECK_CXXFLAGS) $(CLANG_RUNTIME_INCLUDES) >> stylecheck
+	chmod +x stylecheck
 
 clean:
-	rm -f stylecheck check *.o
+	rm -f stylechecker check *.o
 
-test: stylecheck palindrome.cpp
-	./stylecheck palindrome.cpp -- clang++ -c $(CXXFLAGS) $(CLANG_RUNTIME_INCLUDES)
+test: stylechecker palindrome.cpp
+	./stylechecker palindrome.cpp -- clang++ -c $(CXXFLAGS) $(CLANG_RUNTIME_INCLUDES)
