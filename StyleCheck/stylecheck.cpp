@@ -680,17 +680,6 @@ int main(int argc, const char **argv) {
         ).bind("literal"),
       &cb11);
 
-  Finder.addMatcher(
-      binaryOperator(
-         unless(isExpansionInSystemHeader()),
-         anyOf(hasOperatorName("=="),
-               hasOperatorName("!=") ),
-         anyOf(hasLHS(boolLiteral().bind("bool")),
-               hasLHS(implicitCastExpr(has(boolLiteral().bind("bool")))),
-               hasRHS(boolLiteral().bind("bool")),
-               hasRHS(implicitCastExpr(has(boolLiteral().bind("bool")))) )
-        ).bind("expr"),
-      &cb12);
 
   Finder.addMatcher(
       binaryOperator(
