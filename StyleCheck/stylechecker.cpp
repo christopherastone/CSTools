@@ -774,9 +774,14 @@ int main(int argc, const char **argv) {
             // ...specifically a * operator
             hasOperatorName("*"),
             // ...whose operand is a pointer.
-            hasUnaryOperand(expr(hasType(pointerType())))))
+            hasUnaryOperand(
+              expr(
+                hasType(pointerType()),
+                unless(thisExpr())))))
        ).bind("expr"),
       &processMemberProj);
+
+
   //
   // Search for uses of "goto"
   //
@@ -809,21 +814,23 @@ int main(int argc, const char **argv) {
           // ...where that object
           hasObjectExpression(
             // ... is a parenthesized
-            parenExpr(
-              has(
-                // ... use of a unary operator,
-                unaryOperator(
-                  // ... specifically, the * operator
-                  hasOperatorName("*"),
-                  // ...applied to
-                  hasUnaryOperand(
-                    // ... the "this" object
-                    thisExpr().bind("this")
+            ignoringImpCasts(
+              parenExpr(
+                has(
+                  // ... use of a unary operator,
+                  unaryOperator(
+                    // ... specifically, the * operator
+                    hasOperatorName("*"),
+                    // ...applied to
+                    hasUnaryOperand(
+                      // ... the "this" object
+                      thisExpr().bind("this")
+                    )
                   )
-                 )
-               )
-             )
-           ),
+                )
+              )
+            )
+          ),
           // ...and where the projection does not occur in a declaration
           // that was automatically synthesized by the compiler implicitly
           unless(hasAncestor(isImplicit())),
