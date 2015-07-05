@@ -93,6 +93,8 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 // The collection of problems found.
 std::set<Issue> lineIssues;
 
+
+
 // Various regular expressions for variable names
 const boost::regex is_camelCase("(.*::)?[a-z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
 const boost::regex is_CamelCase("(.*::)?[A-Z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
@@ -106,7 +108,8 @@ const boost::regex is_internal("__[A-Za-z0-9]*");
 // Does the filename end with .h or .hpp?
 const boost::regex is_headerFile(".*\\.h(pp)?");
 
-
+// Numeric literals
+const boost::regex is_number{"[-+0-9.][-+0-9.Ee]*"};
 
 /////////////////////////////
 // Cyclomatic Complexity
@@ -606,7 +609,20 @@ public:
     SourceManager& SM = *Result.SourceManager;
     SourceRange range = litExpr->getSourceRange();
 
-    addIssue( SM, range, lineIssues, "Is this a magic number?");
+    // Sadly, we get false positives, because named CPP macros
+    // and intrinsics like sizeof can become integer literals
+    // by the time this analysis runs. Double-check that we
+    // are identifying numeric source code as a magic number,
+    // rather than the name of some macro.
+
+    auto bounds = getBounds(SM, range);
+    SourceLocation start = bounds.first;
+    SourceLocation stop  = bounds.second;
+    std::string code = getCode(SM, start, stop);
+
+    if (boost::regex_match(code, is_number)) {
+      addIssue( SM, range, lineIssues, "Is this a magic number?");
+    }
   }
 };
 
