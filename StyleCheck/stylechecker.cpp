@@ -257,10 +257,10 @@ void addIssue(const SourceManager& SM,
 
   std::string code = getCode(SM, start, stop, offset);
 
-  v.emplace( SM.getFilename(start),
+  v.insert( {SM.getFilename(start),
              SM.getPresumedLineNumber(start),
              SM.getPresumedColumnNumber(start),
-             message, code, sev );
+             message, code, sev} );
 
 }
 

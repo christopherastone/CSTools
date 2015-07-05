@@ -11,8 +11,8 @@
 std::string Issue::cwd_ =
    boost::filesystem::canonical( boost::filesystem::current_path() ).string() + "/";
 
-Issue::Issue(std::string file, int line, int col, std::string title, std::string message,
-              Severity severity):
+Issue::Issue(std::string file, unsigned int line, unsigned int col,
+             std::string title, std::string message, Severity severity):
   //file_{llvm::sys::path::filename(file).str()},
   line_{line},
   column_{col},

@@ -10,8 +10,8 @@ enum class Severity {
 
 class Issue {
 public:
-  Issue(std::string file, int line, int col, std::string title,
-        std::string message, Severity severity);
+  Issue(std::string file, unsigned int line, unsigned int col,
+        std::string title, std::string message, Severity severity);
 
   bool operator<(const Issue&) const;
   bool operator==(const Issue&) const;
@@ -21,8 +21,8 @@ public:
 
 private:
   std::string file_;
-  int line_;
-  int column_;
+  unsigned int line_;
+  unsigned int column_;
   std::string title_;
   std::string message_;
   Severity severity_;
