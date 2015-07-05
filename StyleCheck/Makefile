@@ -34,7 +34,7 @@ stylecheck: stylechecker
 	chmod +x stylecheck
 
 clean:
-	rm -f stylechecker check *.o
+	rm -f stylechecker stylecheck *.o
 
 test: stylechecker palindrome.cpp
 	./stylechecker palindrome.cpp -- clang++ -c $(CXXFLAGS) $(CLANG_RUNTIME_INCLUDES)
