@@ -101,6 +101,7 @@ const boost::regex is_CamelCase("(.*::)?[A-Z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
 const boost::regex final_underscore(".*_");
 const boost::regex is_operator("(.*::)?(operator[^A-Za-z]+|operator .*)");
 const boost::regex is_UPPER_CASE("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*");
+const boost::regex is_UPPER_CASE_("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_");
 
 // Clang introduces variables like __range to implement foreach loops
 const boost::regex is_internal("__[A-Za-z0-9]*");
@@ -371,6 +372,7 @@ public:
           bool matches_camelCase = boost::regex_match(name, is_camelCase);
           bool has_underscore = boost::regex_match(name, final_underscore);
           bool matches_UPPER_CASE = boost::regex_match(name, is_UPPER_CASE);
+          bool matches_UPPER_CASE_ = boost::regex_match(name, is_UPPER_CASE_);
           bool matches_internal = boost::regex_match(name, is_internal);
 
           // Check whether the variable is constant, or could be
@@ -389,6 +391,8 @@ public:
             //  ((init != nullptr) && (init->isIntegerConstantExpr(*(Result.Context)))) ||
             false;
 
+          bool is_field = f->isCXXInstanceMember() || f->isStaticDataMember();
+
           // Diagnose
           if (!is_const &&
               ! (matches_camelCase || has_underscore) &&
@@ -403,6 +407,7 @@ public:
                            " (is this supposed to be constant?)" : "") );
           } else if (is_const &&
                       ! matches_UPPER_CASE &&
+                      ! (matches_UPPER_CASE_ && is_field) &&
                       ! (matches_camelCase && !has_constexpr_definition) &&
                       ! matches_internal) {
             addIssue( SM, range, lineIssues,
