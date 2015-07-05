@@ -350,9 +350,9 @@ public:
           auto complexity = bodyComplexity(body);
           if ( complexity >= COMPLEXITY_LIMIT) {
              addIssue (SM, range, lineIssues,
-                        "Function " + name + " has cyclomatic complexity " +
-                        std::to_string(complexity) +
-                        "; aim for 10 or less per function.",
+                        "(cyclomatic complexity) Function " + name + " has " +
+                        std::to_string(complexity-1) +
+                        " decision points; aim for 10 or fewer per function.",
                         DEFAULT_SEVERITY, -2);
           }
           break;
