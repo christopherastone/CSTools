@@ -1,6 +1,7 @@
-LLVM_SRC_PATH   := $(HOME)/llvm
-LLVM_BUILD_PATH := $(HOME)/llvm-build
-LLVM_INSTALL_PATH := $(HOME)/llvm-install
+CSTOOLS_ROOT := $(shell git rev-parse --show-toplevel)
+LLVM_SRC_PATH   := $(CSTOOLS_ROOT)/llvm
+LLVM_BUILD_PATH := $(CSTOOLS_ROOT)/llvm-build
+LLVM_INSTALL_PATH := $(CSTOOLS_ROOT)/llvm-install
 
 
 

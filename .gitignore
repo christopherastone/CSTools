@@ -19,3 +19,9 @@
 *.exe
 *.out
 *.app
+
+# LLVM/CLANG
+
+llvm
+llvm-build
+llvm-install

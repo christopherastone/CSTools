@@ -2,10 +2,10 @@ include ../llvm.mk
 include ../clang.mk
 
 CXX = clang++
-BOOST_LIBS = -lboost_filesystem -lboost_system
+BOOST_LIBS = -lboost_filesystem -lboost_regex -lboost_system
 
 CPPFLAGS += $(LLVM_CPPFLAGS)
-CXXFLAGS += -std=c++14 -stdlib=libc++ $(LLVM_CXXFLAGS)
+CXXFLAGS += -std=c++11 $(filter-out -fno-exceptions, $(LLVM_CXXFLAGS))
 LDFLAGS  += $(LLVM_LDFLAGS)
 LIBS += $(CLANG_LIBS) $(LLVM_LIBS) $(BOOST_LIBS)
 

@@ -16,8 +16,9 @@
 #include "llvm/Support/Signals.h"
 
 #include <iostream>
-#include <regex>
 #include <set>
+
+#include <boost/regex.hpp>
 
 #include "issue.hpp"
 
@@ -93,17 +94,17 @@ static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 std::set<Issue> lineIssues;
 
 // Various regular expressions for variable names
-std::regex is_camelCase = std::regex("(.*::)?[a-z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
-std::regex is_CamelCase = std::regex("(.*::)?[A-Z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
-std::regex final_underscore = std::regex(".*_");
-std::regex is_operator = std::regex("(.*::)?(operator[^A-Za-z]+|operator .*)");
-std::regex is_UPPER_CASE = std::regex("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*");
+const boost::regex is_camelCase("(.*::)?[a-z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
+const boost::regex is_CamelCase("(.*::)?[A-Z][a-z0-9_]*([A-Z][a-zA-Z0-9_]*)*");
+const boost::regex final_underscore(".*_");
+const boost::regex is_operator("(.*::)?(operator[^A-Za-z]+|operator .*)");
+const boost::regex is_UPPER_CASE("(.*::)?[A-Z][A-Z0-9]*(_[A-Z0-9]+)*");
 
 // Clang introduces variables like __range to implement foreach loops
-std::regex is_internal = std::regex("__[A-Za-z0-9]*");
+const boost::regex is_internal("__[A-Za-z0-9]*");
 
 // Does the filename end with .h or .hpp?
-std::regex is_headerFile = std::regex(".*\\.h(pp)?");
+const boost::regex is_headerFile(".*\\.h(pp)?");
 
 
 
@@ -295,7 +296,7 @@ public:
 
           // Check that we're not in a header file.
           std::string filename = SM.getFilename(range.getBegin());
-          if (std::regex_match(filename, is_headerFile)) {
+          if (boost::regex_match(filename, is_headerFile)) {
             addIssue( SM, range, lineIssues,
                       "Found 'using namespace' in a header" );
           }
@@ -324,9 +325,9 @@ public:
           range.setEnd(body->getLocStart());
 
           // Check the name
-          bool matches_camelCase = std::regex_match(name, is_camelCase);
-          bool matches_operator = std::regex_match(name, is_operator);
-          bool has_underscore = std::regex_match(name, final_underscore);
+          bool matches_camelCase = boost::regex_match(name, is_camelCase);
+          bool matches_operator = boost::regex_match(name, is_operator);
+          bool has_underscore = boost::regex_match(name, final_underscore);
 
           // Note: unfortunately, the computed start/end
           //   pair for the function header is including the
@@ -364,10 +365,10 @@ public:
           std::string name = f->getDeclName().getAsString();
 
           // Check the variable name
-          bool matches_camelCase = std::regex_match(name, is_camelCase);
-          bool has_underscore = std::regex_match(name, final_underscore);
-          bool matches_UPPER_CASE = std::regex_match(name, is_UPPER_CASE);
-          bool matches_internal = std::regex_match(name, is_internal);
+          bool matches_camelCase = boost::regex_match(name, is_camelCase);
+          bool has_underscore = boost::regex_match(name, final_underscore);
+          bool matches_UPPER_CASE = boost::regex_match(name, is_UPPER_CASE);
+          bool matches_internal = boost::regex_match(name, is_internal);
 
           // Check whether the variable is constant, or could be
           auto varType = f->getType();
@@ -416,9 +417,9 @@ public:
 
           // Check the name of the field.
           std::string name = f->getNameAsString();
-          bool matches_camelCase = std::regex_match(name, is_camelCase);
-          bool has_underscore = std::regex_match(name, final_underscore);
-          bool matches_UPPER_CASE = std::regex_match(name, is_UPPER_CASE);
+          bool matches_camelCase = boost::regex_match(name, is_camelCase);
+          bool has_underscore = boost::regex_match(name, final_underscore);
+          bool matches_UPPER_CASE = boost::regex_match(name, is_UPPER_CASE);
 
           // Check the type and initializer of the field
           auto varType = f->getType();
@@ -450,8 +451,8 @@ public:
 
           // Check the name.
           std::string name = f->getNameAsString();
-          bool matches_CamelCase = std::regex_match(name, is_CamelCase);
-          bool has_underscore = std::regex_match(name, final_underscore);
+          bool matches_CamelCase = boost::regex_match(name, is_CamelCase);
+          bool has_underscore = boost::regex_match(name, final_underscore);
 
           // Diagnose
           if (!matches_CamelCase || !has_underscore) {
