@@ -1,10 +1,9 @@
 CSTools
 =======
 
-The CSTools repository will contain many useful tools for working with student submitted code in CS courses.
+Tools for working with student-submitted code in CS courses. So far, there's:
 
-Currently the following tool(s) exist:
-* Replacer: Will replace one or more functions in a specified file with funtions from another file. Useful for replacing broken code with a version from a solution.
+* StyleCheck: Checks C++ code for conformance with several of the style guidelines for HMC's CS 70.
 
-Future tool(s):
-* MakeFriends: Will rewrite code to make a class friends with another class. Useful for testing student code beyond just the exposed interface.
+* Replacer: Replaces one or more functions in a specified file with code extracted from another file. Useful for replacing broken functions with the corresponding versions from a solution. (Eventually the plan is to automatically diagnose errors by automatically determining the fewest number of functions one can replace with correct code, in order to pass the automated tests.)
+
