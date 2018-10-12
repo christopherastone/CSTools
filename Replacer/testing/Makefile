@@ -3,7 +3,7 @@ include ../../clang.mk
 CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -stdlib=libc++ -c
 
 test:
-	../replacer -f "IntList::insert_after(IntList::Iterator, int)" -f "IntList::IntList()" -f "IntList::size()" cs70-intlist-bad1.cpp  cs70-intlist-good.cpp -- $(CLANGCOMMAND)
+	../replacer -f "IntList::insert_after(IntList::Iterator, int)" -f "IntList::IntList()" -f "IntList::size()" -r cs70-intlist-bad1.cpp  cs70-intlist-good.cpp -- $(CLANGCOMMAND)
 
 test2:
 	cp bigint-solution/bigint.cpp bigint-solution/bi.cpp
