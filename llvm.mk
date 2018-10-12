@@ -1,6 +1,5 @@
 CSTOOLS_ROOT := $(shell git rev-parse --show-toplevel)
-LLVM_INSTALL_PATH := /usr/local/opt/llvm
-
+include $(CSTOOLS_ROOT)/llvm.$(shell uname).mk
 
 
 #$(info -----------------------------------------------)
