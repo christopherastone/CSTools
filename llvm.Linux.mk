@@ -1,0 +1,2 @@
+LLVM_INSTALL_PATH := /usr/lib/llvm/6
+LLVM_LIB_PATH := $(LLVM_INSTALL_PATH)/lib64
