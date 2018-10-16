@@ -44,6 +44,7 @@ using namespace llvm;
 #include "clang/ASTMatchers/ASTMatchersInternal.h"
 #include "clang/ASTMatchers/ASTMatchersMacros.h"
 
+#if 0
 namespace clang {
   namespace ast_matchers {
 
@@ -69,6 +70,7 @@ namespace clang {
 
   }
 }
+#endif
 
 ///////////////////////////
 // Command-line Options
@@ -199,7 +201,7 @@ std::pair<SourceLocation,SourceLocation>
       if (SM.isMacroArgExpansion(stop)) {
         stop = SM.getImmediateSpellingLoc(stop);
       } else {
-        stop = SM.getImmediateExpansionRange(stop).second;
+        stop = SM.getImmediateExpansionRange(stop).getEnd();
       }
     }
 
@@ -491,7 +493,7 @@ private:
     return isa<IntegerLiteral>(e) ||
            isa<FloatingLiteral>(e) ||
            isa<CharacterLiteral>(e) ||
-           isa<StringLiteral>(e);
+           isa<clang::StringLiteral>(e);
   }
 
 };
@@ -707,7 +709,7 @@ public:
 ///////////////////////
 //
 int main(int argc, const char **argv) {
-  llvm::sys::PrintStackTraceOnErrorSignal();
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
   CommonOptionsParser OptionsParser(argc, argv, StyleCheckCategory);
   tooling::ClangTool Tool(OptionsParser.getCompilations(),
@@ -752,7 +754,7 @@ int main(int argc, const char **argv) {
                      hasType(pointerType()),
                      // ... but not the this keyword
                      //  (because we handle it separately)
-                     unless(thisExpr())
+                     unless(cxxThisExpr())
                    )
                  )
                )
@@ -764,7 +766,7 @@ int main(int argc, const char **argv) {
 
   Finder.addMatcher(
       // Look for member function invocations
-      memberCallExpr(
+      cxxMemberCallExpr(
         // ...that are not in a system header file
         unless(isExpansionInSystemHeader()),
         // ...and whose callee
@@ -777,7 +779,7 @@ int main(int argc, const char **argv) {
             hasUnaryOperand(
               expr(
                 hasType(pointerType()),
-                unless(thisExpr())))))
+                unless(cxxThisExpr())))))
        ).bind("expr"),
       &processMemberProj);
 
@@ -824,7 +826,7 @@ int main(int argc, const char **argv) {
                     // ...applied to
                     hasUnaryOperand(
                       // ... the "this" object
-                      thisExpr().bind("this")
+                      cxxThisExpr().bind("this")
                     )
                   )
                 )
@@ -844,7 +846,7 @@ int main(int argc, const char **argv) {
       // and look for projections from
       memberExpr(
           // ... the "this" object
-          hasObjectExpression(thisExpr().bind("this")),
+          hasObjectExpression(cxxThisExpr().bind("this")),
           // ... not in a system header file
           unless(isExpansionInSystemHeader()),
           // ...and where the projection does not occur in a declaration
@@ -875,7 +877,7 @@ int main(int argc, const char **argv) {
           // ...and not immediately inside a catch statement
           //    (where LLVM seems to generate variable names taht
           //    loook like class names)
-          unless(hasParent(catchStmt()))
+          unless(hasParent(cxxCatchStmt()))
          ).bind("decl"),
       &processDecl);
 
@@ -933,7 +935,7 @@ int main(int argc, const char **argv) {
          unless(hasAncestor(callExpr(callee(namedDecl(matchesName("__")))))),
          // ...(but sometime the call to __assert_rtn shows up in the AST
          //    as an unresolvedLookupExpr, so check for that.)
-         unless(hasAncestor(callExpr(callee(unresolvedLookupExpr(isSystemURE()))))),
+ ////        unless(hasAncestor(callExpr(callee(unresolvedLookupExpr(isSystemURE()))))),
          // ...and where the literal is not part of an explicit array
          //    initializer list (e.g., the constants in primeLessThan).
          unless(hasParent(initListExpr()))
@@ -980,8 +982,8 @@ int main(int argc, const char **argv) {
                hasOperatorName("!=") ),
          // ...where either the left-hand-side or the
          //    right-hand-side is a boolean literal.
-         anyOf(hasLHS(ignoringImpCasts(boolLiteral().bind("bool"))),
-               hasRHS(ignoringImpCasts(boolLiteral().bind("bool"))) )
+         anyOf(hasLHS(ignoringImpCasts(cxxBoolLiteral().bind("bool"))),
+               hasRHS(ignoringImpCasts(cxxBoolLiteral().bind("bool"))) )
         ).bind("expr"),
       &processEqBool);
 
