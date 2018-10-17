@@ -97,14 +97,26 @@ std::string nameOfDecl(PrintingPolicy Policy, FunctionDecl* f, bool showReturnTy
   if (CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(f)) {
     if (m->isConst()) {
       fullName += " const";
-                }
+    }
   }
+  /*
+  string access;
+  switch (f->getAccess()) {
+      case AS_public: access = "public "; break;
+      case AS_private: access = "private "; break;
+      case AS_protected: access = "protected "; break;
+      default: break;
+  }
+  fullName = access+ fullName;
+  */
 
   if (showReturnTy) {
      QualType returnTy = f->getReturnType();
 //     fullName = returnTy.getCanonicalType().getAsString(Policy) + " " + fullName;
      fullName = nameOfType(Policy, returnTy) + " " + fullName;
   }
+
+  
 
   return fullName;
 }
