@@ -1,19 +1,27 @@
 include ../llvm.mk
 include ../clang.mk
 
-CXX = clang++
-BOOST_LIBS = -lboost_filesystem -lboost_regex -lboost_system
+CXX = $(LLVM_BIN_PATH)/clang++    
+##CXX = clang++    
 
 CPPFLAGS += $(LLVM_CPPFLAGS)
-CXXFLAGS += -std=c++11 $(filter-out -fno-exceptions, $(LLVM_CXXFLAGS))
+CXXFLAGS += -std=c++11 $(LLVM_CXXFLAGS) $(CLANG_RUNTIME_INCLUDES)
+
 LDFLAGS  += $(LLVM_LDFLAGS)
+BOOST_LIBS = -lboost_filesystem -lboost_system
+
 LIBS += $(CLANG_LIBS) $(LLVM_LIBS) $(BOOST_LIBS)
 
+CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -c
 
-all: stylechecker stylecheck
+TARGETS = stylechecker stylecheck
+
+# the LLVM_CONFIG dependency is just there to double-check that
+# we have our path set correctly
+all: $(LLVM_CONFIG) $(TARGETS)
 
 stylechecker: stylechecker.o issue.o
-	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $^ $(LIBS)
+	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) -Wl,-rpath,$(LLVM_LIB_PATH) $^ $(LIBS)
 
 issue.o: issue.cpp issue.hpp
 	$(CXX) -c $(CXXFLAGS) $<

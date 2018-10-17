@@ -14,7 +14,8 @@ LLVM_CONFIG := $(LLVM_BIN_PATH)/llvm-config
 LLVM_CPPFLAGS += $(shell $(LLVM_CONFIG) --cppflags)
 # For some reason llvm-config returns the -Wno-class-memaccess flag, but
 #   clang++ itself doesn't understand it, leading to a pointless warning.
-LLVM_CXXFLAGS += $(filter-out -Wno-class-memaccess, $(shell $(LLVM_CONFIG) --cxxflags))
+#LLVM_CXXFLAGS += $(filter-out -Wno-class-memaccess, $(shell $(LLVM_CONFIG) --cxxflags))
+LLVM_CXXFLAGS += $(shell $(LLVM_CONFIG) --cxxflags)
 LLVM_LDFLAGS += $(shell $(LLVM_CONFIG) --ldflags) 
 
 # Include these *after* clang's libraries
