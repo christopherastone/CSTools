@@ -1,2 +1,3 @@
-LLVM_INSTALL_PATH := /usr/lib/llvm/6
-LLVM_LIB_PATH := $(LLVM_INSTALL_PATH)/lib64
+LLVM_INSTALL_PATH := /cs/cs70/llvm-2018/install
+LLVM_LIB_PATH := $(LLVM_INSTALL_PATH)/lib
+LLVM_LDFLAGS :=  -Wl,-rpath,$(LLVM_LIB_PATH)

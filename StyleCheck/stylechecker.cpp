@@ -328,7 +328,8 @@ public:
           // just because the name is funny. Move the
           // end of the displayed range to the start of the
           // function body.
-          range.setEnd(body->getLocStart());
+	       // range.setEnd(body->getLocStart());
+          range.setEnd(body->getBeginLoc());
 
           // Check the name
           bool matches_camelCase = boost::regex_match(name, is_camelCase);

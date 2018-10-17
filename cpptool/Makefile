@@ -2,13 +2,14 @@ include ../llvm.mk
 include ../clang.mk
 
 CXX = $(LLVM_BIN_PATH)/clang++    
+##CXX = clang++    
 
 CPPFLAGS += $(LLVM_CPPFLAGS)
-CXXFLAGS += -std=c++11 -stdlib=libc++ $(LLVM_CXXFLAGS)
+CXXFLAGS += -std=c++11 $(LLVM_CXXFLAGS)
 LDFLAGS  += $(LLVM_LDFLAGS)
 LIBS += $(CLANG_LIBS) $(LLVM_LIBS)
 
-CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -stdlib=libc++ -c
+CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -c
 
 TARGETS = cpptool dump
 
@@ -18,11 +19,11 @@ all: $(LLVM_CONFIG) $(TARGETS)
 
 cpptool: cpptool.o 
 	@echo Linking $@
-	@$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
+	$(CXX) -o $@ $(LDFLAGS) -Wl,-rpath,$(LLVM_LIB_PATH) $^ $(LIBS)
 
 cpptool.o: cpptool.cpp 
 	@echo Compiling $*.cpp
-	@$(CXX) -c $(CXXFLAGS) $<
+	$(CXX) -c $(CXXFLAGS) $<
 
 dump: ../llvm.mk ../clang.mk Makefile
 	echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > dump

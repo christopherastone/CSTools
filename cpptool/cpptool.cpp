@@ -113,7 +113,7 @@ std::string nameOfDecl(PrintingPolicy Policy, FunctionDecl* f, bool showReturnTy
   if (showReturnTy) {
      QualType returnTy = f->getReturnType();
 //     fullName = returnTy.getCanonicalType().getAsString(Policy) + " " + fullName;
-     fullName = nameOfType(Policy, returnTy) + " " + fullName;
+     fullName = nameOfType(Policy, returnTy) + "\t" + fullName;
   }
 
   
