@@ -1,6 +1,6 @@
 # include after llvm.mk
 
-include $(CSTOOLS_ROOT)/clang.$(shell uname).mk
+include $(CSTOOLS_ROOT)/clang.$(shell hostname -s).mk
 
 
 CPP_INCLUDE_DIR = $(shell echo | clang++ -Wp,-v -stdlib=libc++ -x c++ - -fsyntax-only 2>&1 | egrep "^ " | head -1)

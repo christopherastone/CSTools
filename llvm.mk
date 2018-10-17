@@ -1,5 +1,5 @@
 CSTOOLS_ROOT := $(shell git rev-parse --show-toplevel)
-include $(CSTOOLS_ROOT)/llvm.$(shell uname).mk
+include $(CSTOOLS_ROOT)/llvm.$(shell hostname -s).mk
 
 
 #$(info -----------------------------------------------)
