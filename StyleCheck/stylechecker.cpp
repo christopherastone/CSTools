@@ -530,7 +530,7 @@ public:
     SourceManager &SM = *Result.SourceManager;
     SourceRange range = expr->getSourceRange();
 
-    addIssue(SM, range, lineIssues, "Using '->' would be better!");
+    addIssue(SM, range, lineIssues, "Using '->' is simpler and more idiomatic.");
   }
 };
 
@@ -578,7 +578,7 @@ public:
     // Diagnose
     std::string fieldName = projExpr->getMemberNameInfo().getAsString();
     addIssue(SM, range, lineIssues,
-             "Expression could be simplified to just '" + fieldName + "'");
+             "Inside a member function, 'this' is implicit and you can just say '" + fieldName + "'");
   }
 };
 
