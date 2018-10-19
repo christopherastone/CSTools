@@ -34,8 +34,9 @@ using namespace std;
 
 static unordered_set<string> potentialReplacements;
 static unordered_map<string,string> replacements;
-static bool replaceAll = false;
+//static bool replaceAll = false;
 
+static unordered_map<string,string> componentAccess;
 
 /////////////////////////
 // COMMAND-LINE OPTIONS 
@@ -79,44 +80,64 @@ std::string nameOfType(PrintingPolicy Policy, QualType ty)
   return ty.getAsString(Policy);
 }
 
+std::string nameOfAccess(AccessSpecifier access)
+{
+  switch (access) {
+    case AS_public: return "public "; 
+    case AS_private: return "private ";
+    case AS_protected: return "protected ";
+    default: return "";
+  }
+}
+
 // Converts the AST for a function declaration into 
 //   a human-readable (i.e., demangled) string representation.
 // 
-std::string nameOfDecl(PrintingPolicy Policy, FunctionDecl* f, bool showReturnTy = false)
+std::string nameOfDecl(PrintingPolicy Policy, NamedDecl* nd, 
+                       bool showReturnTy = false, bool showAccess = false)
 {
-  std::string funcName = f->getQualifiedNameAsString();
-  std::string fullName = funcName + "(";
-  ArrayRef<ParmVarDecl*> parameters = f->parameters();
+  std::string fullName = nd->getQualifiedNameAsString();
 
-  for (const auto& pvd : parameters) {
-    if (&pvd != &parameters[0]) fullName += ", ";
-    fullName += nameOfType(Policy, pvd->getType());
-  }
-  fullName += ")";
+  if (FunctionDecl* f = dyn_cast<FunctionDecl>(nd)) {
+    fullName +="(";
+    ArrayRef<ParmVarDecl*> parameters = f->parameters();
 
-  if (CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(f)) {
-    if (m->isConst()) {
-      fullName += " const";
+
+    for (const auto& pvd : parameters) {
+      if (&pvd != &parameters[0]) fullName += ", ";
+      fullName += nameOfType(Policy, pvd->getType());
     }
-  }
-  /*
-  string access;
-  switch (f->getAccess()) {
-      case AS_public: access = "public "; break;
-      case AS_private: access = "private "; break;
-      case AS_protected: access = "protected "; break;
-      default: break;
-  }
-  fullName = access+ fullName;
-  */
+    fullName += ")";
 
-  if (showReturnTy) {
-     QualType returnTy = f->getReturnType();
-//     fullName = returnTy.getCanonicalType().getAsString(Policy) + " " + fullName;
-     fullName = nameOfType(Policy, returnTy) + "\t" + fullName;
-  }
 
-  
+    if (showReturnTy) {
+      QualType returnTy = f->getReturnType();
+      fullName = nameOfType(Policy, returnTy) + " " + fullName;
+    }
+
+    if (CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(nd)) {
+      if (m->isConst()) {
+        fullName += " const";
+      }
+
+      if (m->isDeleted()) {
+        fullName += " = delete";
+      } else if (m->isDefaulted()) {
+        fullName += " = default";
+      }
+
+      if (m->isVirtual()) {
+        fullName = "virtual " + fullName;
+      }
+    }
+
+    if (showAccess) {
+      fullName = nameOfAccess(f->getCanonicalDecl()->getAccess()) + fullName;
+    }
+  } else if (FieldDecl* f = dyn_cast<FieldDecl>(nd)) {
+      fullName = nameOfType(Policy, f->getType()) + " " + fullName;
+      fullName = nameOfAccess(f->getAccess()) + fullName;
+  }
 
   return fullName;
 }
@@ -131,24 +152,80 @@ std::string nameOfDecl(PrintingPolicy Policy, FunctionDecl* f, bool showReturnTy
 
 using action_t = std::function<void(const SourceManager&, const LangOptions&, Decl*)>;
 
+class MyASTSearchVisitor
+  : public RecursiveASTVisitor<MyASTSearchVisitor> {
+public:
+  explicit MyASTSearchVisitor(const SourceManager& sm, const LangOptions& lo) 
+    : sm_{sm}, lo_{lo}
+  {
+      // Nothing (else) to do
+  }
+
+  bool VisitDecl(Decl* decl) {
+    // For debugging, dumping the AST nodes will show which nodes are already
+    // being visited.
+    //Declaration->dump();
+
+   SourceRange range = decl->getSourceRange();
+   SourceLocation start = range.getBegin();
+//   SourceLocation stop = range.getEnd();
+   if (sm_.isInSystemHeader(start)) return true;
+   if (start.isMacroID()) return true;
+
+
+   if (CXXMethodDecl* f = dyn_cast<CXXMethodDecl>(decl)) {
+
+
+      if (f->isThisDeclarationADefinition()) {
+      // if (f->hasBody()) {
+
+            string fullName = nameOfDecl(lo_, f, true, true);
+            llvm::outs() << "define " << fullName << "\n";
+//            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
+//                         << SM.getFilename(stop) << "\n";
+       } else {
+            string fullName = nameOfDecl(lo_, f, true, true);
+            llvm::outs() << "declare " << fullName << "\n";
+//            llvm::outs() << "At location " << sm_.getFilename(start) << "-" 
+//                         << sm_.getFilename(stop) << "\n";
+
+       }
+      
+   } else if (FieldDecl* f = dyn_cast<FieldDecl>(decl)) {
+            string fullName = nameOfDecl(lo_, f, true, true);
+            llvm::outs() << "field " << fullName << "\n";
+
+   }
+
+   // The return value indicates whether we want the visitation to proceed.
+   // Return false to stop the traversal of the AST.
+   return true;
+  }
+private:
+    const SourceManager& sm_;
+    const LangOptions& lo_;
+};
+
+
+
 class MyASTSearchConsumer : public ASTConsumer {
 public:
 //  MyASTSearchConsumer(Rewriter &R) : TheRewriter{R} {}
-  MyASTSearchConsumer(const ASTContext& context, const action_t& action) : 
-      sm_{context.getSourceManager()}, lo_{context.getLangOpts()}, action_{action} 
+  MyASTSearchConsumer(const ASTContext& context) : 
+      visitor_{context.getSourceManager(), context.getLangOpts()}
   {
      // Nothing (else) to do!
   }
 
   virtual void HandleInlineFunctionDefinition(FunctionDecl* d) override {
-    action_(sm_, lo_, d);
+    visitor_.TraverseDecl(d);
   }
   // Override the method that gets called for each parsed top-level
   // declaration.
   virtual bool HandleTopLevelDecl(DeclGroupRef DR) override {
 
     for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
-      action_(sm_, lo_, *b);
+      visitor_.TraverseDecl(*b);
       /*
       if (FunctionDecl* f = dyn_cast<FunctionDecl>(*b)) {
         if (f->hasBody()) {
@@ -193,31 +270,36 @@ public:
 private:
 //  Rewriter& TheRewriter;
 //    ASTContext& context_;
-    const SourceManager& sm_;
-    const LangOptions& lo_;
-    action_t action_;
+    MyASTSearchVisitor visitor_;
 };
 
 
 void listUserFunctions(const SourceManager& SM, const LangOptions& LangOpts, Decl* decl)
 {
-     if (FunctionDecl* f = dyn_cast<FunctionDecl>(decl)) {
-//        if (f->isThisDeclarationADefinition()) {
-//        if (f->hasBody()) {
-          string fullName = nameOfDecl(LangOpts, f, true);
+   SourceRange range = decl->getSourceRange();
+   SourceLocation start = range.getBegin();
+   SourceLocation stop = range.getEnd();
+   if (SM.isInSystemHeader(start)) return;
 
-            SourceRange range = f->getSourceRange();
-            SourceLocation start = range.getBegin();
-//            SourceLocation stop = range.getEnd();
+   if (CXXMethodDecl* f = dyn_cast<CXXMethodDecl>(decl)) {
 
-            if (start.isMacroID()) return;
-            //if (SM.isInSystemHeader(start)) return;
-            if (! SM.isInMainFile(start)) return;
-            llvm::outs() << fullName << "\n";
-//            llvm::errs() << "At location" << SM.getFilename(start) << "-" 
+      // if (start.isMacroID()) return;
+
+//      if (f->isThisDeclarationADefinition()) {
+      // if (f->hasBody()) {
+
+//            string fullName = nameOfDecl(LangOpts, f, true);
+//            llvm::outs() << fullName << "\n";
+//            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
 //                         << SM.getFilename(stop) << "\n";
-//        }
-     }
+ //      } else {
+            string fullName = nameOfDecl(LangOpts, f, true, true);
+            llvm::outs() << "declare " << fullName << "\n";
+            llvm::outs() << "At location " << SM.getFilename(start) << "-" 
+                         << SM.getFilename(stop) << "\n";
+
+//       }
+   }
 }
 
 class MySearchAction : public ASTFrontendAction {
@@ -229,7 +311,7 @@ public:
   {
     // llvm::errs() << "** Creating AST consumer for: " << file << "\n";
     // TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-    return llvm::make_unique<MyASTSearchConsumer>(CI.getASTContext(), listUserFunctions); // was (TheRewriter);
+    return llvm::make_unique<MyASTSearchConsumer>(CI.getASTContext()); // was (TheRewriter);
   }
 
 private:
@@ -339,9 +421,12 @@ int main(int argc, const char **argv) {
   CommonOptionsParser OptionsParser(argc, argv, ReplaceToolCategory, ADDITIONAL_HELP);
 
   if (dumpFunctions) {
-  ClangTool SearchTool(OptionsParser.getCompilations(),
+    ClangTool SearchTool(OptionsParser.getCompilations(),
                         OptionsParser.getSourcePathList());
-  int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
+    int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
+    if (searchError) {
+       llvm::errs() << "**Problem searching for function names**";
+    }
   }
 #if 0
   for (auto& s : functionsToReplace) {

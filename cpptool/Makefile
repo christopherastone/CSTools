@@ -19,15 +19,16 @@ all: $(LLVM_CONFIG) $(TARGETS)
 
 cpptool: cpptool.o 
 	@echo Linking $@
-	$(CXX) -o $@ $(LDFLAGS) -Wl,-rpath,$(LLVM_LIB_PATH) $^ $(LIBS)
+	@$(CXX) -o $@ $(LDFLAGS) -Wl,-rpath,$(LLVM_LIB_PATH) $^ $(LIBS)
 
 cpptool.o: cpptool.cpp 
 	@echo Compiling $*.cpp
-	$(CXX) -c $(CXXFLAGS) $<
+	@$(CXX) -c $(CXXFLAGS) $<
 
 dump: ../llvm.mk ../clang.mk Makefile
-	echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > dump
-	chmod +x dump
+	@echo Generating dump script
+	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > dump
+	@chmod +x dump
 
 clean:
 	rm -f cpptool cpptool.o
