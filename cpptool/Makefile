@@ -11,7 +11,7 @@ LIBS += $(CLANG_LIBS) $(LLVM_LIBS)
 
 CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -c
 
-TARGETS = cpptool dump
+TARGETS = cpptool dump run
 
 # the LLVM_CONFIG dependency is just there to double-check that
 # we have our path set correctly
@@ -29,6 +29,11 @@ dump: ../llvm.mk ../clang.mk Makefile
 	@echo Generating dump script
 	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > dump
 	@chmod +x dump
+
+run: ../llvm.mk ../clang.mk Makefile
+	@echo Generating run script
+	@echo ${shell pwd}/cpptool $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > run
+	@chmod +x run
 
 clean:
 	rm -f cpptool cpptool.o

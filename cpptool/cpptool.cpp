@@ -1,6 +1,11 @@
+// e.g., 
+//    ./run -e=foo.expect foo.cpp
+
+#include <algorithm>
 #include <string>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <vector>
 #include <unordered_set>
@@ -38,6 +43,10 @@ static unordered_map<string,string> replacements;
 
 static unordered_map<string,string> componentAccess;
 
+std::vector<std::string> expectedMembers;
+std::unordered_set<std::string> foundMembers;
+
+
 /////////////////////////
 // COMMAND-LINE OPTIONS 
 /////////////////////////
@@ -46,6 +55,7 @@ static cl::OptionCategory ReplaceToolCategory("Replacer Options");
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 //static cl::extrahelp MoreHelp("\nMore help text...");
 
+/*
 static cl::list<string> functionsToReplace(
       "f",
       cl::desc("function to replace"),
@@ -57,8 +67,15 @@ static cl::list<string> replacementFiles(
       cl::desc("replacement file"),
       cl::ZeroOrMore,
       cl::cat(ReplaceToolCategory));
+*/
 
-static cl::opt<bool> dumpFunctions(
+static cl::opt<string> expectedMemberFile(
+      "e",
+      cl::desc("Specify expected members"),
+      cl::value_desc("filename"),
+      cl::cat(ReplaceToolCategory));
+
+static cl::opt<bool> dumpMembers(
       "d",
       cl::desc("Dump the functions defined in the specified files"),
       cl::cat(ReplaceToolCategory));
@@ -69,6 +86,8 @@ static cl::opt<bool> canonicalTypes(
       cl::cat(ReplaceToolCategory));
 
 const char * const ADDITIONAL_HELP = "Replaces designated functions or member functions in C++ source";
+
+
 
 //////////////////////
 // HELPER FUNCTIONS
@@ -148,14 +167,14 @@ std::string nameOfDecl(PrintingPolicy Policy, NamedDecl* nd,
 
 // ASTConsumer is an interface used to write generic actions on an AST,
 // regardless of how the AST was produced. 
-// s̄ASTConsumer provides many different entry points
+// ASTConsumer provides many different entry points
 
-using action_t = std::function<void(const SourceManager&, const LangOptions&, Decl*)>;
+// using action_t = std::function<void(const SourceManager&, const LangOptions&, Decl*)>;
 
 class MyASTSearchVisitor
   : public RecursiveASTVisitor<MyASTSearchVisitor> {
 public:
-  explicit MyASTSearchVisitor(const SourceManager& sm, const LangOptions& lo) 
+  MyASTSearchVisitor(const SourceManager& sm, const LangOptions& lo) 
     : sm_{sm}, lo_{lo}
   {
       // Nothing (else) to do
@@ -180,20 +199,26 @@ public:
       // if (f->hasBody()) {
 
             string fullName = nameOfDecl(lo_, f, true, true);
-            llvm::outs() << "define " << fullName << "\n";
+            std::string memberDescription = "define " + fullName;
+            foundMembers.insert(memberDescription);
+            if (dumpMembers) llvm::outs() << memberDescription << "\n";
 //            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
 //                         << SM.getFilename(stop) << "\n";
        } else {
             string fullName = nameOfDecl(lo_, f, true, true);
-            llvm::outs() << "declare " << fullName << "\n";
-//            llvm::outs() << "At location " << sm_.getFilename(start) << "-" 
+            std::string memberDescription = "declare " + fullName;
+            foundMembers.insert(memberDescription);
+            if (dumpMembers) llvm::outs() << memberDescription << "\n";
+            //            llvm::outs() << "At location " << sm_.getFilename(start) << "-" 
 //                         << sm_.getFilename(stop) << "\n";
 
        }
       
    } else if (FieldDecl* f = dyn_cast<FieldDecl>(decl)) {
             string fullName = nameOfDecl(lo_, f, true, true);
-            llvm::outs() << "field " << fullName << "\n";
+            std::string memberDescription = "field " + fullName;
+            foundMembers.insert(memberDescription);
+            if (dumpMembers) llvm::outs() << memberDescription << "\n";
 
    }
 
@@ -415,19 +440,43 @@ private:
 
 #endif  
 
+
 int main(int argc, const char **argv) {
   // llvm::sys::PrintStackTraceOnErrorSignal();
 
   CommonOptionsParser OptionsParser(argc, argv, ReplaceToolCategory, ADDITIONAL_HELP);
 
-  if (dumpFunctions) {
-    ClangTool SearchTool(OptionsParser.getCompilations(),
-                        OptionsParser.getSourcePathList());
-    int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
-    if (searchError) {
-       llvm::errs() << "**Problem searching for function names**";
+  bool checkExpectedMembers = expectedMemberFile != "";
+
+  if (checkExpectedMembers) {
+    std::ifstream in(expectedMemberFile);
+    if (! in.good()) {
+      llvm::errs() << "Can't open expectation file " << expectedMemberFile << "\n";
+      exit(-1);
+    }  
+    std::string line;
+    while (std::getline(in, line))
+    {
+       expectedMembers.push_back(line);
+    }
+
+  }
+
+  ClangTool SearchTool(OptionsParser.getCompilations(),
+                       OptionsParser.getSourcePathList());
+  int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
+  if (searchError) {
+       llvm::errs() << "**Problem searching for function names**\n";
+  }
+  
+  if (checkExpectedMembers) {
+    for (const std::string& s : expectedMembers) {
+      if (foundMembers.find(s) == foundMembers.end()) {
+        llvm::errs() << "MISSING: " << s << "\n";
+      }
     }
   }
+
 #if 0
   for (auto& s : functionsToReplace) {
     potentialReplacements.insert(s);
