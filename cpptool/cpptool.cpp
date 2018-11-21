@@ -1,5 +1,9 @@
 // e.g., 
 //    ./run -e=foo.expect foo.cpp
+//    (cd testing; ../run -extract="IntList::push_front" cs70-intlist-good.cpp)
+
+// KNOWN BUG: I haven't figured out how to allow spaces in the 'extract' string..
+
 
 #include <algorithm>
 #include <string>
@@ -68,6 +72,11 @@ static cl::list<string> replacementFiles(
       cl::ZeroOrMore,
       cl::cat(ReplaceToolCategory));
 */
+
+static cl::opt<string> definitionToExtract(
+      "extract",
+      cl::desc("member to extract"),
+      cl::cat(ReplaceToolCategory));
 
 static cl::opt<string> expectedMemberFile(
       "e",
@@ -187,12 +196,12 @@ public:
 
    SourceRange range = decl->getSourceRange();
    SourceLocation start = range.getBegin();
-//   SourceLocation stop = range.getEnd();
+   SourceLocation stop = range.getEnd();
    if (sm_.isInSystemHeader(start)) return true;
    if (start.isMacroID()) return true;
 
 
-   if (CXXMethodDecl* f = dyn_cast<CXXMethodDecl>(decl)) {
+   if (FunctionDecl* f = dyn_cast<FunctionDecl>(decl)) {
 
 
       if (f->isThisDeclarationADefinition()) {
@@ -202,6 +211,27 @@ public:
             std::string memberDescription = "define " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
+
+            if (definitionToExtract != "" && fullName.find(definitionToExtract) != string::npos) {
+                
+                // https://stackoverflow.com/questions/25275212/how-to-extract-comments-and-match-to-declaration-with-recursiveastvisitor-in-lib
+                if (const RawComment* rc = f->getASTContext().getRawCommentForDeclNoCache(f)) {
+                  start = rc->getBeginLoc();
+                }
+
+                // Clang source ranges are closed intervals, meaning
+                // that 'stop' identifies the last token in the function,
+                // i.e., the closing right curly brace. We could just
+                // add 1 character to get the open interval needed below,
+                // but let's be good and programmatically compute the
+                // length of this final token.
+                size_t offset = Lexer::MeasureTokenLength(stop, sm_, lo_);
+
+                std::string code =
+                  std::string(sm_.getCharacterData(start),
+                      sm_.getCharacterData(stop)-sm_.getCharacterData(start)+offset);
+                llvm::outs() << code << "\n";            
+            }
 //            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
 //                         << SM.getFilename(stop) << "\n";
        } else {

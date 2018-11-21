@@ -27,12 +27,12 @@ cpptool.o: cpptool.cpp
 
 dump: ../llvm.mk ../clang.mk Makefile
 	@echo Generating dump script
-	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > dump
+	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat > dump
 	@chmod +x dump
 
 run: ../llvm.mk ../clang.mk Makefile
 	@echo Generating run script
-	@echo ${shell pwd}/cpptool $$\* -- ${CLANGCOMMAND} -I $(LLVM_INSTALL_PATH)/include | cat > run
+	@echo ${shell pwd}/cpptool $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat > run
 	@chmod +x run
 
 clean:
