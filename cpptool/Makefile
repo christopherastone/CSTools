@@ -27,12 +27,21 @@ cpptool.o: cpptool.cpp
 
 dump: ../llvm.mk ../clang.mk Makefile
 	@echo Generating dump script
-	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat > dump
+	@rm -f dump
+	@touch dump
+	@echo '#!/bin/zsh' > dump
+	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> dump
 	@chmod +x dump
 
+# if we use the default shell, quoted arguments containing spaces get screwed up when the cpptool command runs
+# So, make sure the script runs zsh
 run: ../llvm.mk ../clang.mk Makefile
 	@echo Generating run script
-	@echo ${shell pwd}/cpptool $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat > run
+	@rm -f run
+	@touch run
+	@echo '#!/bin/zsh' > run
+	cat run
+	@echo ${shell pwd}/cpptool $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> run
 	@chmod +x run
 
 clean:
