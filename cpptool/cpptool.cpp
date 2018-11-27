@@ -3,17 +3,17 @@
 //    (cd testing; ../run -extract="IntList::push_front" cs70-intlist-good.cpp)
 
 #include <algorithm>
-#include <string>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <string>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
 
-#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
@@ -124,7 +124,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
 {
   std::string fullName = nd->getQualifiedNameAsString();
 
-  if (const FunctionDecl* f = dyn_cast<FunctionDecl>(nd)) {
+  if (const auto* f = dyn_cast<FunctionDecl>(nd)) {
     fullName +="(";
     ArrayRef<ParmVarDecl*> parameters = f->parameters();
 
@@ -141,7 +141,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
       fullName = nameOfType(Policy, returnTy) + " " + fullName;
     }
 
-    if (const CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(nd)) {
+    if (const auto* m = dyn_cast<CXXMethodDecl>(nd)) {
       if (m->isConst()) {
         fullName += " const";
       }
@@ -160,7 +160,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
     if (showAccess) {
       fullName = nameOfAccess(f->getCanonicalDecl()->getAccess()) + fullName;
     }
-  } else if (const FieldDecl* f = dyn_cast<FieldDecl>(nd)) {
+  } else if (const auto* f = dyn_cast<FieldDecl>(nd)) {
       fullName = nameOfType(Policy, f->getType()) + " " + fullName;
       fullName = nameOfAccess(f->getAccess()) + fullName;
   }
@@ -176,7 +176,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
 auto FunctionDeclMatcher = functionDecl().bind("functionDecl");
 class ProcessFunctionDecls : public MatchFinder::MatchCallback {
 public :
-  virtual void run(const MatchFinder::MatchResult &Result) {
+  void run(const MatchFinder::MatchResult &Result) override {
     if (const FunctionDecl* f = Result.Nodes.getNodeAs<clang::FunctionDecl>("functionDecl")) {
         const LangOptions& lo = Result.Context->getLangOpts();
         const SourceManager& sm = Result.Context->getSourceManager();
@@ -194,7 +194,7 @@ public :
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
 
-            if (definitionToExtract != "" && fullName.find(definitionToExtract) != std::string::npos) {
+            if (!definitionToExtract.empty() && fullName.find(definitionToExtract) != std::string::npos) {
                 
                 // https://stackoverflow.com/questions/25275212/how-to-extract-comments-and-match-to-declaration-with-recursiveastvisitor-in-lib
                 if (const RawComment* rc = f->getASTContext().getRawCommentForDeclNoCache(f)) {
@@ -232,7 +232,7 @@ auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
 
 class ProcessFieldDecls : public MatchFinder::MatchCallback {
 public :
-  virtual void run(const MatchFinder::MatchResult &Result) {
+  void run(const MatchFinder::MatchResult &Result) override {
     if (const FieldDecl* f = Result.Nodes.getNodeAs<clang::FieldDecl>("fieldDecl")) {
             const LangOptions& lo = Result.Context->getLangOpts();
             const SourceManager& sm = Result.Context->getSourceManager();
