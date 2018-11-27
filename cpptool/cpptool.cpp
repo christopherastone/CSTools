@@ -2,9 +2,6 @@
 //    ./run -e=foo.expect foo.cpp
 //    (cd testing; ../run -extract="IntList::push_front" cs70-intlist-good.cpp)
 
-// KNOWN BUG: I haven't figured out how to allow spaces in the 'extract' string..
-
-
 #include <algorithm>
 #include <string>
 #include <fstream>
@@ -15,8 +12,8 @@
 #include <unordered_set>
 #include <unordered_map>
 
-#include "clang/AST/ASTConsumer.h"
-#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
@@ -38,61 +35,65 @@
 
 using namespace clang;
 using namespace clang::tooling;
-using namespace llvm;
-using namespace std;
+using namespace clang::ast_matchers;
+//using namespace llvm;
+//using namespace std;
 
-static unordered_set<string> potentialReplacements;
-static unordered_map<string,string> replacements;
+//static unordered_set<std::string> potentialReplacements;
+//static unordered_map<std::string,string> replacements;
 //static bool replaceAll = false;
 
-static unordered_map<string,string> componentAccess;
+//static unordered_map<std::string,string> componentAccess;
 
-std::vector<std::string> expectedMembers;
-std::unordered_set<std::string> foundMembers;
+static std::vector<std::string> expectedMembers;
+static std::unordered_set<std::string> foundMembers;
+
+static std::unordered_map<std::string, std::string> declarations;
+static std::unordered_map<std::string, std::string> definitions;
 
 
 /////////////////////////
 // COMMAND-LINE OPTIONS 
 /////////////////////////
 
-static cl::OptionCategory ReplaceToolCategory("Replacer Options");
-static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-//static cl::extrahelp MoreHelp("\nMore help text...");
+static llvm::cl::OptionCategory ReplaceToolCategory("Replacer Options");
+static llvm::cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
+//static llvm::cl::extrahelp MoreHelp("\nMore help text...");
 
 /*
-static cl::list<string> functionsToReplace(
+static llvm::cl::list<std::string> functionsToReplace(
       "f",
-      cl::desc("function to replace"),
-      cl::ZeroOrMore,
-      cl::cat(ReplaceToolCategory));
+      llvm::cl::desc("function to replace"),
+      llvm::cl::ZeroOrMore,
+      llvm::cl::cat(ReplaceToolCategory));
 
-static cl::list<string> replacementFiles(
+static llvm::cl::list<std::string> replacementFiles(
       "r",
-      cl::desc("replacement file"),
-      cl::ZeroOrMore,
-      cl::cat(ReplaceToolCategory));
+      llvm::cl::desc("replacement file"),
+      llvm::cl::ZeroOrMore,
+      llvm::cl::cat(ReplaceToolCategory));
 */
 
-static cl::opt<string> definitionToExtract(
+static llvm::cl::opt<std::string> definitionToExtract(
       "extract",
-      cl::desc("member to extract"),
-      cl::cat(ReplaceToolCategory));
+      llvm::cl::desc("member to extract"),
+      llvm::cl::cat(ReplaceToolCategory));
 
-static cl::opt<string> expectedMemberFile(
+static llvm::cl::opt<std::string> expectedMemberFile(
       "e",
-      cl::desc("Specify expected members"),
-      cl::value_desc("filename"),
-      cl::cat(ReplaceToolCategory));
+      llvm::cl::desc("Specify expected members"),
+      llvm::cl::value_desc("filename"),
+      llvm::cl::cat(ReplaceToolCategory));
 
-static cl::opt<bool> dumpMembers(
+static llvm::cl::opt<bool> dumpMembers(
       "d",
-      cl::desc("Dump the functions defined in the specified files"),
-      cl::cat(ReplaceToolCategory));
+      llvm::cl::desc("Dump the functions defined in the specified files"),
+      llvm::cl::cat(ReplaceToolCategory));
 
-static cl::opt<bool> canonicalTypes(
+static llvm::cl::opt<bool> canonicalTypes(
       "c",
-      cl::desc("Print canonicalized types"),
-      cl::cat(ReplaceToolCategory));
+      llvm::cl::desc("Print canonicalized types"),
+      llvm::cl::cat(ReplaceToolCategory));
 
 const char * const ADDITIONAL_HELP = "Replaces designated functions or member functions in C++ source";
 
@@ -121,12 +122,12 @@ std::string nameOfAccess(AccessSpecifier access)
 // Converts the AST for a function declaration into 
 //   a human-readable (i.e., demangled) string representation.
 // 
-std::string nameOfDecl(PrintingPolicy Policy, NamedDecl* nd, 
+std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd, 
                        bool showReturnTy = false, bool showAccess = false)
 {
   std::string fullName = nd->getQualifiedNameAsString();
 
-  if (FunctionDecl* f = dyn_cast<FunctionDecl>(nd)) {
+  if (const FunctionDecl* f = dyn_cast<FunctionDecl>(nd)) {
     fullName +="(";
     ArrayRef<ParmVarDecl*> parameters = f->parameters();
 
@@ -143,7 +144,7 @@ std::string nameOfDecl(PrintingPolicy Policy, NamedDecl* nd,
       fullName = nameOfType(Policy, returnTy) + " " + fullName;
     }
 
-    if (CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(nd)) {
+    if (const CXXMethodDecl* m = dyn_cast<CXXMethodDecl>(nd)) {
       if (m->isConst()) {
         fullName += " const";
       }
@@ -162,7 +163,7 @@ std::string nameOfDecl(PrintingPolicy Policy, NamedDecl* nd,
     if (showAccess) {
       fullName = nameOfAccess(f->getCanonicalDecl()->getAccess()) + fullName;
     }
-  } else if (FieldDecl* f = dyn_cast<FieldDecl>(nd)) {
+  } else if (const FieldDecl* f = dyn_cast<FieldDecl>(nd)) {
       fullName = nameOfType(Policy, f->getType()) + " " + fullName;
       fullName = nameOfAccess(f->getAccess()) + fullName;
   }
@@ -174,45 +175,29 @@ std::string nameOfDecl(PrintingPolicy Policy, NamedDecl* nd,
 // Code for Extracting Functions //
 ///////////////////////////////////
 
-// ASTConsumer is an interface used to write generic actions on an AST,
-// regardless of how the AST was produced. 
-// ASTConsumer provides many different entry points
 
-// using action_t = std::function<void(const SourceManager&, const LangOptions&, Decl*)>;
+auto FunctionDeclMatcher = functionDecl().bind("functionDecl");
+class ProcessFunctionDecls : public MatchFinder::MatchCallback {
+public :
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    if (const FunctionDecl* f = Result.Nodes.getNodeAs<clang::FunctionDecl>("functionDecl")) {
+        const LangOptions& lo = Result.Context->getLangOpts();
+        const SourceManager& sm = Result.Context->getSourceManager();
 
-class MyASTSearchVisitor
-  : public RecursiveASTVisitor<MyASTSearchVisitor> {
-public:
-  MyASTSearchVisitor(const SourceManager& sm, const LangOptions& lo) 
-    : sm_{sm}, lo_{lo}
-  {
-      // Nothing (else) to do
-  }
+        SourceRange range = f->getSourceRange();
+        SourceLocation start = range.getBegin();
+        SourceLocation stop = range.getEnd();
 
-  bool VisitDecl(Decl* decl) {
-    // For debugging, dumping the AST nodes will show which nodes are already
-    // being visited.
-    //Declaration->dump();
+        if (sm.isInSystemHeader(start)) return;
 
-   SourceRange range = decl->getSourceRange();
-   SourceLocation start = range.getBegin();
-   SourceLocation stop = range.getEnd();
-   if (sm_.isInSystemHeader(start)) return true;
-   if (start.isMacroID()) return true;
+        if (f->isThisDeclarationADefinition()) {
 
-
-   if (FunctionDecl* f = dyn_cast<FunctionDecl>(decl)) {
-
-
-      if (f->isThisDeclarationADefinition()) {
-      // if (f->hasBody()) {
-
-            string fullName = nameOfDecl(lo_, f, true, true);
+            std::string fullName = nameOfDecl(lo, f, true, true);
             std::string memberDescription = "define " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
 
-            if (definitionToExtract != "" && fullName.find(definitionToExtract) != string::npos) {
+            if (definitionToExtract != "" && fullName.find(definitionToExtract) != std::string::npos) {
                 
                 // https://stackoverflow.com/questions/25275212/how-to-extract-comments-and-match-to-declaration-with-recursiveastvisitor-in-lib
                 if (const RawComment* rc = f->getASTContext().getRawCommentForDeclNoCache(f)) {
@@ -225,153 +210,49 @@ public:
                 // add 1 character to get the open interval needed below,
                 // but let's be good and programmatically compute the
                 // length of this final token.
-                size_t offset = Lexer::MeasureTokenLength(stop, sm_, lo_);
+                size_t offset = Lexer::MeasureTokenLength(stop, sm, lo);
 
                 std::string code =
-                  std::string(sm_.getCharacterData(start),
-                      sm_.getCharacterData(stop)-sm_.getCharacterData(start)+offset);
+                  std::string(sm.getCharacterData(start),
+                      sm.getCharacterData(stop)-sm.getCharacterData(start)+offset);
                 llvm::outs() << code << "\n";            
             }
-//            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
-//                         << SM.getFilename(stop) << "\n";
+            //            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
+            //                         << SM.getFilename(stop) << "\n";
        } else {
-            string fullName = nameOfDecl(lo_, f, true, true);
+            std::string fullName = nameOfDecl(lo, f, true, true);
             std::string memberDescription = "declare " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
-            //            llvm::outs() << "At location " << sm_.getFilename(start) << "-" 
-//                         << sm_.getFilename(stop) << "\n";
-
+            //            llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+            //                         << sm_.getFilename(stop) << "\n";
        }
-      
-   } else if (FieldDecl* f = dyn_cast<FieldDecl>(decl)) {
-            string fullName = nameOfDecl(lo_, f, true, true);
+    }
+  }
+};
+
+auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
+
+class ProcessFieldDecls : public MatchFinder::MatchCallback {
+public :
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    if (const FieldDecl* f = Result.Nodes.getNodeAs<clang::FieldDecl>("fieldDecl")) {
+            const LangOptions& lo = Result.Context->getLangOpts();
+            const SourceManager& sm = Result.Context->getSourceManager();
+
+            SourceRange range = f->getSourceRange();
+            SourceLocation start = range.getBegin();            
+            if (sm.isInSystemHeader(start)) return;
+
+            std::string fullName = nameOfDecl(lo, f, true, true);
             std::string memberDescription = "field " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
-
-   }
-
-   // The return value indicates whether we want the visitation to proceed.
-   // Return false to stop the traversal of the AST.
-   return true;
-  }
-private:
-    const SourceManager& sm_;
-    const LangOptions& lo_;
-};
-
-
-
-class MyASTSearchConsumer : public ASTConsumer {
-public:
-//  MyASTSearchConsumer(Rewriter &R) : TheRewriter{R} {}
-  MyASTSearchConsumer(const ASTContext& context) : 
-      visitor_{context.getSourceManager(), context.getLangOpts()}
-  {
-     // Nothing (else) to do!
-  }
-
-  virtual void HandleInlineFunctionDefinition(FunctionDecl* d) override {
-    visitor_.TraverseDecl(d);
-  }
-  // Override the method that gets called for each parsed top-level
-  // declaration.
-  virtual bool HandleTopLevelDecl(DeclGroupRef DR) override {
-
-    for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
-      visitor_.TraverseDecl(*b);
-      /*
-      if (FunctionDecl* f = dyn_cast<FunctionDecl>(*b)) {
-        if (f->hasBody()) {
-          string fullName = nameOfDecl(LangOpts, f);
-
-          auto i = potentialReplacements.find(fullName);
-
-          if (replaceAll || i != potentialReplacements.end()) {
-
-            SourceRange range = f->getSourceRange();
-            SourceLocation start = range.getBegin();
-            SourceLocation stop = range.getEnd();
-
-            if (start.isMacroID()) break;
-            if (SM.isInSystemHeader(start)) break;
-            llvm::errs() << "Search found the extracted function " << fullName << "\n";
-
-            //llvm::errs() << "At location" <<
-              //TheRewriter.getSourceMgr().getFilename(start) << "\n";
-
-            // Clang source ranges are closed intervals, meaning
-            // that 'stop' identifies the last token in the function,
-            // i.e., the closing right curly brace. We could just
-            // add 1 character to get the open interval needed below,
-            // but let's be good and programmatically compute the
-            // length of this final token.
-            size_t offset = Lexer::MeasureTokenLength(stop, SM, LangOpts);
-
-            std::string code =
-              std::string(SM.getCharacterData(start),
-                  SM.getCharacterData(stop)-SM.getCharacterData(start)+offset);
-
-            replacements.insert(make_pair(fullName, code));
-          }
-        }
-      }
-      */
     }
-    return true;
   }
-
-private:
-//  Rewriter& TheRewriter;
-//    ASTContext& context_;
-    MyASTSearchVisitor visitor_;
 };
 
-
-void listUserFunctions(const SourceManager& SM, const LangOptions& LangOpts, Decl* decl)
-{
-   SourceRange range = decl->getSourceRange();
-   SourceLocation start = range.getBegin();
-   SourceLocation stop = range.getEnd();
-   if (SM.isInSystemHeader(start)) return;
-
-   if (CXXMethodDecl* f = dyn_cast<CXXMethodDecl>(decl)) {
-
-      // if (start.isMacroID()) return;
-
-//      if (f->isThisDeclarationADefinition()) {
-      // if (f->hasBody()) {
-
-//            string fullName = nameOfDecl(LangOpts, f, true);
-//            llvm::outs() << fullName << "\n";
-//            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
-//                         << SM.getFilename(stop) << "\n";
- //      } else {
-            string fullName = nameOfDecl(LangOpts, f, true, true);
-            llvm::outs() << "declare " << fullName << "\n";
-            llvm::outs() << "At location " << SM.getFilename(start) << "-" 
-                         << SM.getFilename(stop) << "\n";
-
-//       }
-   }
-}
-
-class MySearchAction : public ASTFrontendAction {
-public:
-  MySearchAction() {}
-
-  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
-                                                 StringRef file) override
-  {
-    // llvm::errs() << "** Creating AST consumer for: " << file << "\n";
-    // TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-    return llvm::make_unique<MyASTSearchConsumer>(CI.getASTContext()); // was (TheRewriter);
-  }
-
-private:
-//  Rewriter TheRewriter;
-};
+#if 0
 
 #if 0
 
@@ -470,9 +351,11 @@ private:
 
 #endif  
 
+#endif
 
 int main(int argc, const char **argv) {
   // llvm::sys::PrintStackTraceOnErrorSignal();
+
 
   CommonOptionsParser OptionsParser(argc, argv, ReplaceToolCategory, ADDITIONAL_HELP);
 
@@ -492,13 +375,17 @@ int main(int argc, const char **argv) {
 
   }
 
-  ClangTool SearchTool(OptionsParser.getCompilations(),
-                       OptionsParser.getSourcePathList());
-  int searchError = SearchTool.run(newFrontendActionFactory<MySearchAction>().get());
-  if (searchError) {
-       llvm::errs() << "**Problem searching for function names**\n";
-  }
-  
+  ClangTool Tool(OptionsParser.getCompilations(),
+                 OptionsParser.getSourcePathList());
+  ProcessFunctionDecls pfnd;
+  ProcessFieldDecls pfdd;
+
+  MatchFinder Finder;
+  Finder.addMatcher(FunctionDeclMatcher, &pfnd);
+  Finder.addMatcher(FieldDeclMatcher, &pfdd);
+
+  Tool.run(newFrontendActionFactory(&Finder).get());
+
   if (checkExpectedMembers) {
     for (const std::string& s : expectedMembers) {
       if (foundMembers.find(s) == foundMembers.end()) {
@@ -507,13 +394,14 @@ int main(int argc, const char **argv) {
     }
   }
 
+
 #if 0
   for (auto& s : functionsToReplace) {
     potentialReplacements.insert(s);
   }
 
   ClangTool SearchTool(OptionsParser.getCompilations(),
-                        vector<string>(replacementFiles) );
+                        vector<std::string>(replacementFiles) );
 
   if (functionsToReplace.size() == 0) {
     replaceAll = true;
