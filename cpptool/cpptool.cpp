@@ -172,8 +172,13 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
 // Code for Extracting Functions //
 ///////////////////////////////////
 
+bool uninterestingLocation(const SourceManager& sm, SourceLocation loc)
+{
+   return (sm.isInSystemHeader(loc) || !loc.isValid() || loc.isMacroID());
+}
 
-auto FunctionDeclMatcher = functionDecl().bind("functionDecl");
+auto FunctionDeclMatcher = functionDecl(unless(isExpansionInSystemHeader())).bind("functionDecl");
+
 class ProcessFunctionDecls : public MatchFinder::MatchCallback {
 public :
   void run(const MatchFinder::MatchResult &Result) override {
@@ -185,7 +190,7 @@ public :
         SourceLocation start = range.getBegin();
         SourceLocation stop = range.getEnd();
 
-        if (sm.isInSystemHeader(start)) return;
+        if (uninterestingLocation(sm, start)) return;
 
         if (f->isThisDeclarationADefinition()) {
 
@@ -214,16 +219,29 @@ public :
                       sm.getCharacterData(stop)-sm.getCharacterData(start)+offset);
                 llvm::outs() << code << "\n";            
             }
-            //            llvm::errs() << "At location " << SM.getFilename(start) << "-" 
-            //                         << SM.getFilename(stop) << "\n";
+            // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+            //               << sm.getFilename(stop) << "\n";
        } else {
             std::string fullName = nameOfDecl(lo, f, true, true);
             std::string memberDescription = "declare " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
-            //            llvm::outs() << "At location " << sm.getFilename(start) << "-" 
-            //                         << sm_.getFilename(stop) << "\n";
+            // f->dump();
+            // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+            //              << sm.getFilename(stop) << "\n";
        }
+    } else if (const FieldDecl* f = Result.Nodes.getNodeAs<clang::FieldDecl>("fieldDecl")) {
+            const LangOptions& lo = Result.Context->getLangOpts();
+            const SourceManager& sm = Result.Context->getSourceManager();
+
+            SourceRange range = f->getSourceRange();
+            SourceLocation start = range.getBegin();            
+            if (uninterestingLocation(sm, start)) return;
+
+            std::string fullName = nameOfDecl(lo, f, true, true);
+            std::string memberDescription = "field " + fullName;
+            foundMembers.insert(memberDescription);
+            if (dumpMembers) llvm::outs() << memberDescription << "\n";
     }
   }
 };
@@ -233,19 +251,6 @@ auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
 class ProcessFieldDecls : public MatchFinder::MatchCallback {
 public :
   void run(const MatchFinder::MatchResult &Result) override {
-    if (const FieldDecl* f = Result.Nodes.getNodeAs<clang::FieldDecl>("fieldDecl")) {
-            const LangOptions& lo = Result.Context->getLangOpts();
-            const SourceManager& sm = Result.Context->getSourceManager();
-
-            SourceRange range = f->getSourceRange();
-            SourceLocation start = range.getBegin();            
-            if (sm.isInSystemHeader(start)) return;
-
-            std::string fullName = nameOfDecl(lo, f, true, true);
-            std::string memberDescription = "field " + fullName;
-            foundMembers.insert(memberDescription);
-            if (dumpMembers) llvm::outs() << memberDescription << "\n";
-    }
   }
 };
 
@@ -379,7 +384,7 @@ int main(int argc, const char **argv) {
 
   MatchFinder Finder;
   Finder.addMatcher(FunctionDeclMatcher, &pfnd);
-  Finder.addMatcher(FieldDeclMatcher, &pfdd);
+  Finder.addMatcher(FieldDeclMatcher, &pfnd);
 
   Tool.run(newFrontendActionFactory(&Finder).get());
 
