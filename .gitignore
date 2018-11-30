@@ -25,3 +25,7 @@
 llvm
 llvm-build
 llvm-install
+cpptool/run
+StyleCheck/stylechecker
+StyleCheck/stylecheck
+cpptool/compile_commands.json
