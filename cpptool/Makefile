@@ -1,8 +1,8 @@
 include ../llvm.mk
 include ../clang.mk
 
-CXX = $(LLVM_BIN_PATH)/clang++    
-##CXX = clang++    
+#CXX = $(LLVM_BIN_PATH)/clang++    
+CXX = clang++    
 
 CPPFLAGS += $(LLVM_CPPFLAGS)
 CXXFLAGS += -std=c++11 $(LLVM_CXXFLAGS) 
@@ -12,7 +12,7 @@ LIBS += $(CLANG_LIBS) $(LLVM_LIBS)
 CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -c
 
 TARGETS = cpptool dump run 
-ALLTARGETS = compile_commands.json
+ALLTARGETS = compile_commands.json $(TARGETS) 
 
 # the LLVM_CONFIG dependency is just there to double-check that
 # we have our path set correctly
@@ -24,7 +24,7 @@ cpptool: cpptool.o
 
 cpptool.o: cpptool.cpp 
 	@echo Compiling $*.cpp
-	@$(CXX) -c $(CXXFLAGS) $<
+	$(CXX) -c $(CXXFLAGS) $<
 
 dump: ../llvm.mk ../clang.mk Makefile
 	@echo Generating dump script
@@ -51,7 +51,7 @@ compile_commands.json: Makefile
 
 
 clean:
-	rm -f cpptool cpptool.o
+	rm -f *.o $(TARGETS)
 
 test: all
 	(cd testing; $(MAKE) test)

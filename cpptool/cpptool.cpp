@@ -92,6 +92,18 @@ static llvm::cl::opt<bool> canonicalTypes(
       llvm::cl::desc("Print canonicalized types"),
       llvm::cl::cat(ReplaceToolCategory));
 
+static llvm::cl::opt<std::string> classRenaming(
+      "rename",
+      llvm::cl::desc("class renaming, e.g., A@B or A::B@C::D"),
+//      llvm::cl::ZeroOrMore,
+      llvm::cl::cat(ReplaceToolCategory)
+);
+
+// static llvm::cc::opt<std::string> fieldToRename(
+//      "rename",
+//      llvm::cl::desc("e.g., A::x~y"),
+// )
+
 const char * const ADDITIONAL_HELP = "Replaces designated functions or member functions in C++ source";
 
 
@@ -178,6 +190,7 @@ bool uninterestingLocation(const SourceManager& sm, SourceLocation loc)
 }
 
 auto FunctionDeclMatcher = functionDecl(unless(isExpansionInSystemHeader())).bind("functionDecl");
+auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
 
 class ProcessFunctionDecls : public MatchFinder::MatchCallback {
 public :
@@ -246,13 +259,46 @@ public :
   }
 };
 
-auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
+auto classDeclMatcher = cxxRecordDecl(unless(isExpansionInSystemHeader())).bind("classDecl");
+//auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
 
-class ProcessFieldDecls : public MatchFinder::MatchCallback {
+
+class GenerateRenamings : public MatchFinder::MatchCallback {
 public :
-  void run(const MatchFinder::MatchResult &Result) override {
+  GenerateRenamings(Replacements* rpp): rpp_{rpp} {
+      // Nothing (else) to do
   }
+
+  void run(const MatchFinder::MatchResult &Result) override {
+        llvm::errs() << "Class matcher 1\n";
+    if (const CXXRecordDecl* f = Result.Nodes.getNodeAs<clang::CXXRecordDecl>("classDecl")) {
+
+        llvm::errs() << "Class matcher 2\n";
+
+        const LangOptions& lo = Result.Context->getLangOpts();
+        const SourceManager& sm = Result.Context->getSourceManager();
+
+        SourceRange range = f->getQualifierLoc().getSourceRange();
+        SourceLocation start = range.getBegin();
+        SourceLocation stop = range.getEnd();
+
+        //if (uninterestingLocation(sm, start)) return;
+
+        if (auto p = f->getQualifier()) {
+          p->dump();
+        } else {
+          llvm::errs() << "no qualifier; dumping declaration instead\n";
+          f->dump();
+        }
+        llvm::errs() << "Found it at location " << sm.getFilename(start) << "-" 
+                     << sm.getFilename(stop) << "\n";
+    }
+  }
+
+private:
+  Replacements* rpp_;
 };
+
 
 #if 0
 
@@ -380,11 +426,17 @@ int main(int argc, const char **argv) {
   ClangTool Tool(OptionsParser.getCompilations(),
                  OptionsParser.getSourcePathList());
   ProcessFunctionDecls pfnd;
-  ProcessFieldDecls pfdd;
+  GenerateRenamings gr{nullptr};
 
   MatchFinder Finder;
   Finder.addMatcher(FunctionDeclMatcher, &pfnd);
   Finder.addMatcher(FieldDeclMatcher, &pfnd);
+
+
+  if (! classRenaming.empty()) {
+    llvm::errs() << "Adding class matcher\n";
+    Finder.addMatcher(classDeclMatcher, &gr);
+  }
 
   Tool.run(newFrontendActionFactory(&Finder).get());
 
