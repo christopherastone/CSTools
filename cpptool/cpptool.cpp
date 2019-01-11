@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -48,7 +49,7 @@ static std::unordered_set<std::string> foundMembers;
 static std::unordered_map<std::string, std::string> declarations;
 static std::unordered_map<std::string, std::string> definitions;
 
-static std::unordered_map<std::string, std::set<std::string>> callGraph;
+static std::map<std::string, std::set<std::string>> callGraph;
 
 /////////////////////////
 // COMMAND-LINE OPTIONS 
@@ -140,7 +141,8 @@ std::string nameOfAccess(AccessSpecifier access)
 //   a human-readable (i.e., demangled) string representation.
 // 
 std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd, 
-                       bool showReturnTy = false, bool showAccess = false)
+                       bool showReturnTy = false, bool showAccess = false,
+                       bool showDelDef = false)
 {
   std::string fullName = nd->getQualifiedNameAsString();
 
@@ -166,14 +168,16 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
         fullName += " const";
       }
 
-      if (m->isDeleted()) {
-        fullName += " = delete";
-      } else if (m->isDefaulted()) {
-        fullName += " = default";
+      if (showDelDef) {
+        if (m->isDeleted()) {
+          fullName += " = delete";
+        } else if (m->isDefaulted()) {
+          fullName += " = default";
+        }
       }
-
+      
       if (m->isVirtual()) {
-        fullName = "virtual " + fullName;
+      fullName = "virtual " + fullName;
       }
     }
 
@@ -183,6 +187,14 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
   } else if (const auto* f = dyn_cast<FieldDecl>(nd)) {
       fullName = nameOfType(Policy, f->getType()) + " " + fullName;
       fullName = nameOfAccess(f->getAccess()) + fullName;
+  }
+
+  if (canonicalTypes) {
+    fullName = std::regex_replace(fullName, std::regex("std::__1::"), "std::");
+    fullName = std::regex_replace(fullName, std::regex("basic_string<char>"), "string");
+    fullName = std::regex_replace(fullName, std::regex("basic_string<char, std::char_traits<char>, std::allocator<char> >"), "string");
+    fullName = std::regex_replace(fullName, std::regex("basic_ostream<char, std::char_traits<char> >"), "ostream");
+    fullName = std::regex_replace(fullName, std::regex("basic_ostream<char>"), "ostream");
   }
 
   return fullName;
@@ -215,7 +227,7 @@ public :
 
         if (f->isThisDeclarationADefinition()) {
 
-            std::string fullName = nameOfDecl(lo, f, true, true);
+            std::string fullName = nameOfDecl(lo, f, true, true, true);
             std::string memberDescription = "define " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
@@ -245,7 +257,7 @@ public :
             // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
             //               << sm.getFilename(stop) << "\n";
        } else {
-            std::string fullName = nameOfDecl(lo, f, true, true);
+            std::string fullName = nameOfDecl(lo, f, true, true, true);
             std::string memberDescription = "declare " + fullName;
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
@@ -314,7 +326,8 @@ public :
       std::string fName = nameOfDecl(lo, f);
       std::string gName = nameOfDecl(lo, g);
 
-      llvm::outs() << fName << " calls " << gName << "\n";            
+      // llvm::errs() << fName << " calls " << gName << "\n";
+      callGraph[fName].insert(gName);
             
       // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
       //               << sm.getFilename(stop) << "\n";
@@ -505,7 +518,6 @@ int main(int argc, const char **argv) {
 
   ProcessCalls pc;
   if (dumpCalls) {
-    llvm::errs() << "Dumping calls\n";
     Finder.addMatcher(CallMatcher, &pc);
     Finder.addMatcher(ConstructMatcher, &pc);
   }
@@ -516,6 +528,16 @@ int main(int argc, const char **argv) {
     for (const std::string& s : expectedMembers) {
       if (foundMembers.find(s) == foundMembers.end()) {
         llvm::errs() << "MISSING: " << s << "\n";
+      }
+    }
+  }
+
+  if (dumpCalls) {
+    llvm::errs() << "Dumping calls\n";
+    for (auto kv : callGraph) {
+      llvm::outs() << kv.first << ":\n";
+      for (auto callee : kv.second) {
+        llvm::outs() << "    " << callee << "\n";
       }
     }
   }

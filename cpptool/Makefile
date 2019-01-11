@@ -57,7 +57,7 @@ test: all
 
 
 test-calls: run cpptool
-	./run -calls testing/cs70-intlist-good.cpp
+	./run -c -calls testing/cs70-intlist-good.cpp
 
 test-extract: run cpptool
 	./run -extract push_back testing/cs70-intlist-good.cpp
