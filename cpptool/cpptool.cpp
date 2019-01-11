@@ -109,6 +109,12 @@ static llvm::cl::opt<bool> dumpCalls(
       llvm::cl::cat(ReplaceToolCategory)
       );
 
+static llvm::cl::opt<bool> verbose(
+      "v",
+      llvm::cl::desc("Verbose output"),
+      llvm::cl::cat(ReplaceToolCategory)
+      );
+
 
 // static llvm::cc::opt<std::string> fieldToRename(
 //      "rename",
@@ -195,6 +201,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
     fullName = std::regex_replace(fullName, std::regex("std::__1::"), "std::");
     fullName = std::regex_replace(fullName, std::regex("basic_string<char>"), "string");
     fullName = std::regex_replace(fullName, std::regex("basic_string<char, std::char_traits<char>, std::allocator<char> >"), "string");
+    fullName = std::regex_replace(fullName, std::regex("::basic_string"), "::string");
     fullName = std::regex_replace(fullName, std::regex("basic_ostream<char, std::char_traits<char> >"), "ostream");
     fullName = std::regex_replace(fullName, std::regex("basic_ostream<char>"), "ostream");
   }
@@ -544,7 +551,9 @@ int main(int argc, const char **argv) {
                    << "   [LINE " << definition_lines[kv.first] << "]"
                    << ":\n";
       for (auto callee : kv.second) {
-        llvm::outs() << "    " << callee << "\n";
+        if (verbose || definition_lines[callee] != 0) {
+          llvm::outs() << "    " << callee << "\n";
+        }
       }
     }
   }
