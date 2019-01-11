@@ -44,8 +44,11 @@ using namespace clang::ast_matchers;
 
 //static unordered_map<std::string,string> componentAccess;
 
-static std::vector<std::string> expectedMembers;
+static std::set<std::string> expectedMembers;
+static std::set<std::string> simplifiedExpectedMembers;
 static std::unordered_set<std::string> foundMembers;
+//static std::unordered_set<size_t> foundMemberLines;
+static std::unordered_set<size_t> expectedMemberLines;
 
 static std::unordered_map<std::string, std::string> declarations;
 static std::unordered_map<std::string, std::string> definitions;
@@ -129,6 +132,10 @@ const char * const ADDITIONAL_HELP = "Replaces designated functions or member fu
 // HELPER FUNCTIONS
 //////////////////////
 
+bool wasExpected(std::string description) {
+  return expectedMembers.find(description) != expectedMembers.end();
+}
+
 std::string nameOfType(PrintingPolicy Policy, QualType ty)
 {
   if (canonicalTypes) ty = ty.getCanonicalType();
@@ -145,7 +152,6 @@ std::string nameOfAccess(AccessSpecifier access)
   }
 }
 
-// Converts the AST for a function declaration into 
 //   a human-readable (i.e., demangled) string representation.
 // 
 std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd, 
@@ -197,16 +203,20 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
       fullName = nameOfAccess(f->getAccess()) + fullName;
   }
 
-  if (canonicalTypes) {
     fullName = std::regex_replace(fullName, std::regex("std::__1::"), "std::");
     fullName = std::regex_replace(fullName, std::regex("basic_string<char>"), "string");
     fullName = std::regex_replace(fullName, std::regex("basic_string<char, std::char_traits<char>, std::allocator<char> >"), "string");
     fullName = std::regex_replace(fullName, std::regex("::basic_string"), "::string");
     fullName = std::regex_replace(fullName, std::regex("basic_ostream<char, std::char_traits<char> >"), "ostream");
     fullName = std::regex_replace(fullName, std::regex("basic_ostream<char>"), "ostream");
-  }
-
+  
   return fullName;
+}
+
+std::string simplifyDescription(std::string desc) {
+  std::smatch match;
+  std::regex_match(desc, match, std::regex("^.* ([^ ]*\\(.*\\))[^)]*$"));
+  return (match.size() > 0 ? match[1] : desc);
 }
 
 ///////////////////////////////////
@@ -239,6 +249,9 @@ public :
             std::string fullName = nameOfDecl(lo, f, true, true, true);
             std::string memberDescription = "define " + fullName;
             foundMembers.insert(memberDescription);
+            if (wasExpected(memberDescription)) {
+               expectedMemberLines.insert(sm.getExpansionLineNumber(start));
+            }
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
 
 //            if (!definitionToExtract.empty() && fullName.find(definitionToExtract) != std::string::npos) {
@@ -508,7 +521,8 @@ int main(int argc, const char **argv) {
     std::string line;
     while (std::getline(in, line))
     {
-       expectedMembers.push_back(line);
+       expectedMembers.insert(line);
+       simplifiedExpectedMembers.insert(simplifyDescription(line));
     }
 
   }
@@ -529,10 +543,8 @@ int main(int argc, const char **argv) {
   }
 
   ProcessCalls pc;
-  if (dumpCalls) {
-    Finder.addMatcher(CallMatcher, &pc);
-    Finder.addMatcher(ConstructMatcher, &pc);
-  }
+  Finder.addMatcher(CallMatcher, &pc);
+  Finder.addMatcher(ConstructMatcher, &pc);
 
   Tool.run(newFrontendActionFactory(&Finder).get());
 
@@ -545,7 +557,7 @@ int main(int argc, const char **argv) {
   }
 
   if (dumpCalls) {
-    llvm::errs() << "Dumping calls\n";
+    //llvm::errs() << "Dumping calls\n";
     for (auto kv : callGraph) {
       llvm::outs() << kv.first
                    << "   [LINE " << definition_lines[kv.first] << "]"
@@ -559,11 +571,45 @@ int main(int argc, const char **argv) {
   }
 
   if (!definitionToExtract.empty()) {
+    std::vector<std::string> worklist;
     for (auto kv : definitions) {
         if (kv.first.find(definitionToExtract) != std::string::npos) {
-          llvm::outs() << kv.second << "\n";
+          worklist.push_back(kv.first);
         }
-     }
+    }
+    std::set<std::string> names;
+    while (! worklist.empty()) {
+      std::string n = worklist.back();
+      worklist.pop_back();
+      if (definition_lines[n] != 0) {
+         names.insert(n);
+         for (auto n2 : callGraph[n]) {
+           if (names.find(n2) == names.end() && 
+               simplifiedExpectedMembers.find(n2) == simplifiedExpectedMembers.end()) {
+             worklist.push_back(n2);
+           }
+         }
+      }
+    }
+    std::vector<std::string> namevec(names.cbegin(), names.cend());
+    std::sort(namevec.begin(), namevec.end(),
+                [](std::string n1, std::string n2) -> bool {
+                  return (definition_lines[n1] < definition_lines[n2]);
+                });
+    for (const std::string& n : namevec) {
+      llvm::outs() << "\n";
+      std::istringstream iss{definitions[n]};
+      std::string line;
+      size_t lineNo = definition_lines[n];
+      while (!iss.eof()) {
+         std::getline(iss, line);
+         llvm::outs() << lineNo << "  " << line << "\n";
+         ++lineNo;
+      }
+      //llvm::outs() << "\n" << n << "   [LINE" << definition_lines[n] << "]\n" << definitions[n] << "\n";
+    }
+    llvm::outs() << "\n";
+
   } 
 
 

@@ -60,6 +60,7 @@ test-calls: run cpptool
 	./run -c -calls testing/cs70-intlist-good.cpp
 
 test-extract: run cpptool
+	./run -extract push_back -e testing/intlist.expect testing/cs70-intlist-good.cpp
 	./run -extract push_back testing/cs70-intlist-good.cpp
 
 test-dump: run cpptool
