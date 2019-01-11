@@ -1,6 +1,7 @@
 # binaries
 cpptool
-dump
+dumpast
+run
 
 # private test cases
 testing/**/*.cpp

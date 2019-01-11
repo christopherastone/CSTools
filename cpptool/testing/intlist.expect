@@ -1,0 +1,56 @@
+declare public void IntList::IntList()
+declare public void IntList::IntList(const IntList &)
+declare public IntList & IntList::operator=(const IntList &)
+declare public void IntList::~IntList()
+declare public void IntList::push_front(int)
+declare public void IntList::push_back(int)
+declare public int IntList::pop_front()
+declare public size_t IntList::size() const
+declare public bool IntList::operator==(const IntList &) const
+declare public bool IntList::operator!=(const IntList &) const
+declare public void IntList::swap(IntList &)
+declare public void IntList::insert_after(IntList::iterator, int)
+declare public IntList::iterator IntList::begin() const
+declare public IntList::iterator IntList::end() const
+field public int IntList::Element::value_
+field public IntList::Element * IntList::Element::next_
+declare public void IntList::Element::Element(int, IntList::Element *)
+define public void IntList::Element::Element() = delete
+define public void IntList::Element::Element(const IntList::Element &) = delete
+define public IntList::Element & IntList::Element::operator=(const IntList::Element &) = delete
+define public void IntList::Element::~Element() = default
+field private IntList::Element * IntList::back_
+field private IntList::Element * IntList::front_
+field private size_t IntList::size_
+define public void IntList::Iterator::Iterator() = default
+define public void IntList::Iterator::Iterator(const IntList::Iterator &) = default
+define public IntList::Iterator & IntList::Iterator::operator=(const IntList::Iterator &) = default
+define public void IntList::Iterator::~Iterator() = default
+declare public IntList::Iterator & IntList::Iterator::operator++()
+declare public int & IntList::Iterator::operator*() const
+declare public bool IntList::Iterator::operator==(const IntList::Iterator &) const
+declare public bool IntList::Iterator::operator!=(const IntList::Iterator &) const
+declare private void IntList::Iterator::Iterator(IntList::Element *)
+field private IntList::Element * IntList::Iterator::current_
+declare void swap(IntList &, IntList &)
+define public void IntList::swap(IntList &)
+define void swap(IntList &, IntList &)
+define public IntList & IntList::operator=(const IntList &)
+define public size_t IntList::size() const
+define public void IntList::IntList()
+define public void IntList::IntList(const IntList &)
+define public void IntList::~IntList()
+define public bool IntList::operator==(const IntList &) const
+define public bool IntList::operator!=(const IntList &) const
+define public void IntList::push_front(int)
+define public int IntList::pop_front()
+define public void IntList::push_back(int)
+define public void IntList::insert_after(IntList::iterator, int)
+define public IntList::iterator IntList::begin() const
+define public IntList::iterator IntList::end() const
+define public void IntList::Element::Element(int, IntList::Element *)
+define private void IntList::Iterator::Iterator(IntList::Element *)
+define public IntList::Iterator & IntList::Iterator::operator++()
+define public int & IntList::Iterator::operator*() const
+define public bool IntList::Iterator::operator==(const IntList::Iterator &) const
+define public bool IntList::Iterator::operator!=(const IntList::Iterator &) const

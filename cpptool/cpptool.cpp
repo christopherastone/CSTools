@@ -48,6 +48,7 @@ static std::unordered_set<std::string> foundMembers;
 static std::unordered_map<std::string, std::string> declarations;
 static std::unordered_map<std::string, std::string> definitions;
 
+static std::unordered_map<std::string, std::set<std::string>> callGraph;
 
 /////////////////////////
 // COMMAND-LINE OPTIONS 
@@ -98,6 +99,13 @@ static llvm::cl::opt<std::string> classRenaming(
 //      llvm::cl::ZeroOrMore,
       llvm::cl::cat(ReplaceToolCategory)
 );
+
+static llvm::cl::opt<bool> dumpCalls(
+      "calls",
+      llvm::cl::desc("Print calls"),
+      llvm::cl::cat(ReplaceToolCategory)
+      );
+
 
 // static llvm::cc::opt<std::string> fieldToRename(
 //      "rename",
@@ -212,7 +220,7 @@ public :
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
 
-            if (!definitionToExtract.empty() && fullName.find(definitionToExtract) != std::string::npos) {
+//            if (!definitionToExtract.empty() && fullName.find(definitionToExtract) != std::string::npos) {
                 
                 // https://stackoverflow.com/questions/25275212/how-to-extract-comments-and-match-to-declaration-with-recursiveastvisitor-in-lib
                 if (const RawComment* rc = f->getASTContext().getRawCommentForDeclNoCache(f)) {
@@ -230,8 +238,10 @@ public :
                 std::string code =
                   std::string(sm.getCharacterData(start),
                       sm.getCharacterData(stop)-sm.getCharacterData(start)+offset);
-                llvm::outs() << code << "\n";            
-            }
+
+                definitions[nameOfDecl(lo,f)] = code;
+//                llvm::outs() << code << "\n";            
+//            }
             // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
             //               << sm.getFilename(stop) << "\n";
        } else {
@@ -259,6 +269,60 @@ public :
   }
 };
 
+
+
+/////////////////////////////////////////////
+auto CallMatcher = callExpr(unless(isExpansionInSystemHeader()),
+                                   hasAncestor(functionDecl().bind("caller")),
+                                   callee(functionDecl().bind("callee"))).bind("callExpr");
+
+auto ConstructMatcher = cxxConstructExpr(unless(isExpansionInSystemHeader()),
+                                         hasAncestor(functionDecl().bind("caller")), 
+                                         hasDeclaration(functionDecl().bind("callee"))).bind("callExpr");                                          
+
+class ProcessCalls : public MatchFinder::MatchCallback {
+public :
+  void run(const MatchFinder::MatchResult &Result) override {
+      const FunctionDecl* f = Result.Nodes.getNodeAs<clang::FunctionDecl>("caller");
+      if (!f) return;
+      const Expr* e = Result.Nodes.getNodeAs<clang::Expr>("callExpr");
+      if (!e) return;
+      const FunctionDecl* g = Result.Nodes.getNodeAs<clang::FunctionDecl>("callee");
+      if (!g) return;
+      const LangOptions& lo = Result.Context->getLangOpts();
+      const SourceManager& sm = Result.Context->getSourceManager();
+
+      SourceRange range = e->getSourceRange();
+      SourceLocation start = range.getBegin();
+      // SourceLocation stop = range.getEnd();
+
+      if (uninterestingLocation(sm, start)) return;
+
+
+      // Clang source ranges are closed intervals, meaning
+      // that 'stop' identifies the last token in the function,
+      // i.e., the closing right curly brace. We could just
+      // add 1 character to get the open interval needed below,
+      // but let's be good and programmatically compute the
+      // length of this final token.
+      // size_t offset = Lexer::MeasureTokenLength(stop, sm, lo);
+
+      // std::string code =
+      //   std::string(sm.getCharacterData(start),
+      //       sm.getCharacterData(stop)-sm.getCharacterData(start)+offset);
+
+      std::string fName = nameOfDecl(lo, f);
+      std::string gName = nameOfDecl(lo, g);
+
+      llvm::outs() << fName << " calls " << gName << "\n";            
+            
+      // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+      //               << sm.getFilename(stop) << "\n";
+  }
+};
+
+//////////////////////////////////////////////////
+
 auto classDeclMatcher = cxxRecordDecl(unless(isExpansionInSystemHeader())).bind("classDecl");
 //auto FieldDeclMatcher = fieldDecl().bind("fieldDecl");
 
@@ -266,6 +330,7 @@ auto classDeclMatcher = cxxRecordDecl(unless(isExpansionInSystemHeader())).bind(
 class GenerateRenamings : public MatchFinder::MatchCallback {
 public :
   GenerateRenamings(Replacements* rpp): rpp_{rpp} {
+    (void) rpp_;
       // Nothing (else) to do
   }
 
@@ -275,7 +340,7 @@ public :
 
         llvm::errs() << "Class matcher 2\n";
 
-        const LangOptions& lo = Result.Context->getLangOpts();
+        // const LangOptions& lo = Result.Context->getLangOpts();
         const SourceManager& sm = Result.Context->getSourceManager();
 
         SourceRange range = f->getQualifierLoc().getSourceRange();
@@ -438,6 +503,13 @@ int main(int argc, const char **argv) {
     Finder.addMatcher(classDeclMatcher, &gr);
   }
 
+  ProcessCalls pc;
+  if (dumpCalls) {
+    llvm::errs() << "Dumping calls\n";
+    Finder.addMatcher(CallMatcher, &pc);
+    Finder.addMatcher(ConstructMatcher, &pc);
+  }
+
   Tool.run(newFrontendActionFactory(&Finder).get());
 
   if (checkExpectedMembers) {
@@ -447,6 +519,14 @@ int main(int argc, const char **argv) {
       }
     }
   }
+
+  if (!definitionToExtract.empty()) {
+    for (auto kv : definitions) {
+        if (kv.first.find(definitionToExtract) != std::string::npos) {
+          llvm::outs() << kv.second << "\n";
+        }
+     }
+  } 
 
 
 #if 0

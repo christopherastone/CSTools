@@ -11,7 +11,7 @@ LIBS += $(CLANG_LIBS) $(LLVM_LIBS)
 
 CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -c
 
-TARGETS = cpptool dump run 
+TARGETS = cpptool dumpast run 
 ALLTARGETS = compile_commands.json $(TARGETS) 
 
 # the LLVM_CONFIG dependency is just there to double-check that
@@ -26,13 +26,13 @@ cpptool.o: cpptool.cpp
 	@echo Compiling $*.cpp
 	$(CXX) -c $(CXXFLAGS) $<
 
-dump: ../llvm.mk ../clang.mk Makefile
-	@echo Generating dump script
-	@rm -f dump
-	@touch dump
-	@echo '#!/bin/zsh' > dump
-	@echo ${CLANGCOMMAND} -Xclang -ast-dump $$\* -fsyntax-only -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> dump
-	@chmod +x dump
+dumpast: ../llvm.mk ../clang.mk Makefile
+	@echo Generating dumpast script
+	@rm -f dumpast
+	@touch dumpast
+	@echo '#!/bin/zsh' > dumpast
+	@echo ${CLANGCOMMAND} -Xclang -ast-dump $$\* -fsyntax-only -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> dumpast
+	@chmod +x dumpast
 
 # if we use the default shell, quoted arguments containing spaces get screwed up when the cpptool command runs
 # So, make sure the script runs zsh
@@ -54,4 +54,25 @@ clean:
 
 test: all
 	(cd testing; $(MAKE) test)
+
+
+test-calls: run cpptool
+	./run -calls testing/cs70-intlist-good.cpp
+
+test-extract: run cpptool
+	./run -extract push_back testing/cs70-intlist-good.cpp
+
+test-dump: run cpptool
+	./run -d testing/cs70-intlist-good.cpp
+
+test-expect: run cpptool
+	./run -e testing/intlist.expect testing/cs70-intlist-good.cpp
+	./run -e testing/intlist.expect testing/cs70-intlist-bad4.cpp
+
+
+
+
+
+
+
 
