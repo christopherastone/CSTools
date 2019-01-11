@@ -31,7 +31,7 @@ dump: ../llvm.mk ../clang.mk Makefile
 	@rm -f dump
 	@touch dump
 	@echo '#!/bin/zsh' > dump
-	@echo ${shell pwd}/cpptool -d $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> dump
+	@echo ${CLANGCOMMAND} -Xclang -ast-dump $$\* -fsyntax-only -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> dump
 	@chmod +x dump
 
 # if we use the default shell, quoted arguments containing spaces get screwed up when the cpptool command runs
@@ -41,7 +41,6 @@ run: ../llvm.mk ../clang.mk Makefile
 	@rm -f run
 	@touch run
 	@echo '#!/bin/zsh' > run
-	cat run
 	@echo ${shell pwd}/cpptool $$\* -- ${CLANGCOMMAND} -fparse-all-comments -I $(LLVM_INSTALL_PATH)/include | cat >> run
 	@chmod +x run
 
