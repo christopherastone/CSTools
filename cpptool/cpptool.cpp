@@ -3,6 +3,7 @@
 //    (cd testing; ../run -extract="IntList::push_front" cs70-intlist-good.cpp)
 
 #include <algorithm>
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -48,6 +49,7 @@ static std::unordered_set<std::string> foundMembers;
 
 static std::unordered_map<std::string, std::string> declarations;
 static std::unordered_map<std::string, std::string> definitions;
+static std::unordered_map<std::string, size_t> definition_lines;
 
 static std::map<std::string, std::set<std::string>> callGraph;
 
@@ -251,7 +253,10 @@ public :
                   std::string(sm.getCharacterData(start),
                       sm.getCharacterData(stop)-sm.getCharacterData(start)+offset);
 
-                definitions[nameOfDecl(lo,f)] = code;
+                auto shortName = nameOfDecl(lo, f);
+                definitions[shortName] = code;
+                definition_lines[shortName] = sm.getSpellingLineNumber(start);
+
 //                llvm::outs() << code << "\n";            
 //            }
             // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
@@ -535,7 +540,9 @@ int main(int argc, const char **argv) {
   if (dumpCalls) {
     llvm::errs() << "Dumping calls\n";
     for (auto kv : callGraph) {
-      llvm::outs() << kv.first << ":\n";
+      llvm::outs() << kv.first
+                   << "   [LINE " << definition_lines[kv.first] << "]"
+                   << ":\n";
       for (auto callee : kv.second) {
         llvm::outs() << "    " << callee << "\n";
       }
