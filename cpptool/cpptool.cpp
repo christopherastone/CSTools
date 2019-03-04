@@ -1,4 +1,4 @@
-// e.g., 
+// e.g.,
 //    ./run -e=foo.expect foo.cpp
 //    (cd testing; ../run -extract="IntList::push_front" cs70-intlist-good.cpp)
 
@@ -46,7 +46,7 @@ using namespace clang::ast_matchers;
 
 static std::set<std::string> expectedMembers;
 static std::set<std::string> simplifiedExpectedMembers;
-static std::unordered_set<std::string> foundMembers;
+static std::set<std::string> foundMembers;
 //static std::unordered_set<size_t> foundMemberLines;
 static std::unordered_set<size_t> expectedMemberLines;
 
@@ -57,7 +57,7 @@ static std::unordered_map<std::string, size_t> definition_lines;
 static std::map<std::string, std::set<std::string>> callGraph;
 
 /////////////////////////
-// COMMAND-LINE OPTIONS 
+// COMMAND-LINE OPTIONS
 /////////////////////////
 
 static llvm::cl::OptionCategory ReplaceToolCategory("Replacer Options");
@@ -145,7 +145,7 @@ std::string nameOfType(PrintingPolicy Policy, QualType ty)
 std::string nameOfAccess(AccessSpecifier access)
 {
   switch (access) {
-    case AS_public: return "public "; 
+    case AS_public: return "public ";
     case AS_private: return "private ";
     case AS_protected: return "protected ";
     default: return "";
@@ -153,8 +153,8 @@ std::string nameOfAccess(AccessSpecifier access)
 }
 
 //   a human-readable (i.e., demangled) string representation.
-// 
-std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd, 
+//
+std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
                        bool showReturnTy = false, bool showAccess = false,
                        bool showDelDef = false)
 {
@@ -189,7 +189,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
           fullName += " = default";
         }
       }
-      
+
       if (m->isVirtual()) {
       fullName = "virtual " + fullName;
       }
@@ -209,7 +209,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
     fullName = std::regex_replace(fullName, std::regex("::basic_string"), "::string");
     fullName = std::regex_replace(fullName, std::regex("basic_ostream<char, std::char_traits<char> >"), "ostream");
     fullName = std::regex_replace(fullName, std::regex("basic_ostream<char>"), "ostream");
-  
+
   return fullName;
 }
 
@@ -255,7 +255,7 @@ public :
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
 
 //            if (!definitionToExtract.empty() && fullName.find(definitionToExtract) != std::string::npos) {
-                
+
                 // https://stackoverflow.com/questions/25275212/how-to-extract-comments-and-match-to-declaration-with-recursiveastvisitor-in-lib
                 if (const RawComment* rc = f->getASTContext().getRawCommentForDeclNoCache(f)) {
                   start = rc->getBeginLoc();
@@ -277,9 +277,9 @@ public :
                 definitions[shortName] = code;
                 definition_lines[shortName] = sm.getSpellingLineNumber(start);
 
-//                llvm::outs() << code << "\n";            
+//                llvm::outs() << code << "\n";
 //            }
-            // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+            // llvm::outs() << "At location " << sm.getFilename(start) << "-"
             //               << sm.getFilename(stop) << "\n";
        } else {
             std::string fullName = nameOfDecl(lo, f, true, true, true);
@@ -287,7 +287,7 @@ public :
             foundMembers.insert(memberDescription);
             if (dumpMembers) llvm::outs() << memberDescription << "\n";
             // f->dump();
-            // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+            // llvm::outs() << "At location " << sm.getFilename(start) << "-"
             //              << sm.getFilename(stop) << "\n";
        }
     } else if (const FieldDecl* f = Result.Nodes.getNodeAs<clang::FieldDecl>("fieldDecl")) {
@@ -295,7 +295,7 @@ public :
             const SourceManager& sm = Result.Context->getSourceManager();
 
             SourceRange range = f->getSourceRange();
-            SourceLocation start = range.getBegin();            
+            SourceLocation start = range.getBegin();
             if (uninterestingLocation(sm, start)) return;
 
             std::string fullName = nameOfDecl(lo, f, true, true);
@@ -314,8 +314,8 @@ auto CallMatcher = callExpr(unless(isExpansionInSystemHeader()),
                                    callee(functionDecl().bind("callee"))).bind("callExpr");
 
 auto ConstructMatcher = cxxConstructExpr(unless(isExpansionInSystemHeader()),
-                                         hasAncestor(functionDecl().bind("caller")), 
-                                         hasDeclaration(functionDecl().bind("callee"))).bind("callExpr");                                          
+                                         hasAncestor(functionDecl().bind("caller")),
+                                         hasDeclaration(functionDecl().bind("callee"))).bind("callExpr");
 
 class ProcessCalls : public MatchFinder::MatchCallback {
 public :
@@ -353,8 +353,8 @@ public :
 
       // llvm::errs() << fName << " calls " << gName << "\n";
       callGraph[fName].insert(gName);
-            
-      // llvm::outs() << "At location " << sm.getFilename(start) << "-" 
+
+      // llvm::outs() << "At location " << sm.getFilename(start) << "-"
       //               << sm.getFilename(stop) << "\n";
   }
 };
@@ -393,7 +393,7 @@ public :
           llvm::errs() << "no qualifier; dumping declaration instead\n";
           f->dump();
         }
-        llvm::errs() << "Found it at location " << sm.getFilename(start) << "-" 
+        llvm::errs() << "Found it at location " << sm.getFilename(start) << "-"
                      << sm.getFilename(stop) << "\n";
     }
   }
@@ -500,7 +500,7 @@ private:
 
 ///////////////////////////////////////////////////////////////////////
 
-#endif  
+#endif
 
 #endif
 
@@ -510,14 +510,14 @@ int main(int argc, const char **argv) {
 
   CommonOptionsParser OptionsParser(argc, argv, ReplaceToolCategory, ADDITIONAL_HELP);
 
-  bool checkExpectedMembers = expectedMemberFile != "";
+  bool checkExpectedMembers = (expectedMemberFile != "") && definitionToExtract.empty();
 
-  if (checkExpectedMembers) {
+  if (expectedMemberFile != "") {
     std::ifstream in(expectedMemberFile);
     if (! in.good()) {
       llvm::errs() << "Can't open expectation file " << expectedMemberFile << "\n";
       exit(-1);
-    }  
+    }
     std::string line;
     while (std::getline(in, line))
     {
@@ -549,9 +549,20 @@ int main(int argc, const char **argv) {
   Tool.run(newFrontendActionFactory(&Finder).get());
 
   if (checkExpectedMembers) {
+    bool missing = false;
     for (const std::string& s : expectedMembers) {
       if (foundMembers.find(s) == foundMembers.end()) {
+        missing = true;
         llvm::errs() << "MISSING: " << s << "\n";
+      }
+    }
+    if (missing) {
+      std::set<std::string> diff;
+      std::set_difference(foundMembers.begin(), foundMembers.end(),
+                          expectedMembers.begin(), expectedMembers.end(),
+                          std::inserter(diff, diff.end()));
+      for (const std::string& s : diff) {
+        llvm::errs() << "FOUND: " << s << "\n";
       }
     }
   }
@@ -584,8 +595,11 @@ int main(int argc, const char **argv) {
       if (definition_lines[n] != 0) {
          names.insert(n);
          for (auto n2 : callGraph[n]) {
-           if (names.find(n2) == names.end() && 
-               simplifiedExpectedMembers.find(n2) == simplifiedExpectedMembers.end()) {
+           auto n3 = std::regex_replace(n2, std::regex(" const$"), "");
+
+           if (names.find(n2) == names.end() &&
+               simplifiedExpectedMembers.find(n2) == simplifiedExpectedMembers.end() &&
+               simplifiedExpectedMembers.find(n3) == simplifiedExpectedMembers.end()) {
              worklist.push_back(n2);
            }
          }
@@ -610,7 +624,7 @@ int main(int argc, const char **argv) {
     }
     llvm::outs() << "\n";
 
-  } 
+  }
 
 
 #if 0
@@ -655,4 +669,3 @@ int main(int argc, const char **argv) {
   return 0;
 
 }
-
