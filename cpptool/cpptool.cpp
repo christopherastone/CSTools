@@ -204,6 +204,7 @@ std::string nameOfDecl(PrintingPolicy Policy, const NamedDecl* nd,
   }
 
     fullName = std::regex_replace(fullName, std::regex("std::__1::"), "std::");
+    fullName = std::regex_replace(fullName, std::regex("std::__cxx11::"), "std::");
     fullName = std::regex_replace(fullName, std::regex("basic_string<char>"), "string");
     fullName = std::regex_replace(fullName, std::regex("basic_string<char, std::char_traits<char>, std::allocator<char> >"), "string");
     fullName = std::regex_replace(fullName, std::regex("::basic_string"), "::string");
@@ -258,6 +259,7 @@ public :
 
                 // https://stackoverflow.com/questions/25275212/how-to-extract-comments-and-match-to-declaration-with-recursiveastvisitor-in-lib
                 if (const RawComment* rc = f->getASTContext().getRawCommentForDeclNoCache(f)) {
+                  //start = rc->getLocStart();
                   start = rc->getBeginLoc();
                 }
 

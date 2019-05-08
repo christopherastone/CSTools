@@ -5,11 +5,11 @@ include ../clang.mk
 CXX = clang++    
 
 CPPFLAGS += $(LLVM_CPPFLAGS)
-CXXFLAGS += -std=c++11 $(LLVM_CXXFLAGS) 
+CXXFLAGS += $(LLVM_CXXFLAGS) 
 LDFLAGS  += $(LLVM_LDFLAGS)
 LIBS += $(CLANG_LIBS) $(LLVM_LIBS)
 
-CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++11 -c
+CLANGCOMMAND = clang++ $(CLANG_RUNTIME_INCLUDES) -std=c++1z -c
 
 TARGETS = cpptool dumpast run 
 ALLTARGETS = compile_commands.json $(TARGETS) 
